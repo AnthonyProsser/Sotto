@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1000" viewBox="0 0 1600 1000">
+  <defs>
+    <linearGradient id="wallpaper" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#e8eef4"/><stop offset=".53" stop-color="#dce8e5"/><stop offset="1" stop-color="#d6d8ed"/>
+    </linearGradient>
+    <linearGradient id="page" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#ffffff"/><stop offset="1" stop-color="#f7f8f9"/></linearGradient>
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="170%"><feDropShadow dx="0" dy="24" stdDeviation="28" flood-color="#344552" flood-opacity=".23"/></filter>
+    <filter id="soft" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="26"/></filter>
+    <filter id="cloud" x="-35%" y="-25%" width="170%" height="150%"><feGaussianBlur stdDeviation="34"/></filter>
+  </defs>
+  <!-- Desktop and host application -->
+  <rect width="1600" height="1000" fill="url(#wallpaper)"/>
+  <circle cx="145" cy="800" r="220" fill="#b7d9da" opacity=".52" filter="url(#soft)"/>
+  <circle cx="1370" cy="155" r="260" fill="#d2c8ed" opacity=".48" filter="url(#soft)"/>
+  <rect x="38" y="34" width="1524" height="932" rx="24" fill="#f8f9fa" filter="url(#shadow)"/>
+  <path d="M62 34h1476a24 24 0 0 1 24 24v44H38V58a24 24 0 0 1 24-24z" fill="#f5f5f6"/>
+  <circle cx="72" cy="68" r="7" fill="#ff5f57"/><circle cx="96" cy="68" r="7" fill="#febc2e"/><circle cx="120" cy="68" r="7" fill="#28c840"/>
+  <text x="150" y="75" font-family="-apple-system, BlinkMacSystemFont, Arial" font-size="18" font-weight="600" fill="#34363a">Notes</text>
+  <text x="1300" y="75" font-family="-apple-system, BlinkMacSystemFont, Arial" font-size="15" fill="#6d7177">Today, 9:41 AM</text>
+  <rect x="38" y="102" width="268" height="864" fill="#f2f3f5"/>
+  <text x="71" y="153" font-family="-apple-system, BlinkMacSystemFont, Arial" font-size="13" font-weight="600" fill="#777b80">FOLDERS</text>
+  <rect x="57" y="175" width="230" height="38" rx="9" fill="#dce9f7"/>
+  <text x="82" y="200" font-family="-apple-system, BlinkMacSystemFont, Arial" font-size="16" font-weight="600" fill="#286aa8">Product</text>
+  <text x="82" y="252" font-family="-apple-system, BlinkMacSystemFont, Arial" font-size="16" fill="#4f5359">Personal</text>
+  <text x="82" y="303" font-family="-apple-system, BlinkMacSystemFont, Arial" font-size="16" fill="#4f5359">Archive</text>
+  <text x="350" y="178" font-family="-apple-system, BlinkMacSystemFont, Arial" font-size="31" font-weight="700" fill="#202124">Weekly product review</text>
+  <text x="350" y="220" font-family="-apple-system, BlinkMacSystemFont, Arial" font-size="15" fill="#777b81">Today at 9:12 AM</text>
+  <rect x="350" y="258" width="820" height="15" rx="7.5" fill="#d9dde0"/><rect x="350" y="291" width="730" height="15" rx="7.5" fill="#d9dde0"/>
+  <rect x="350" y="354" width="690" height="15" rx="7.5" fill="#d9dde0"/><rect x="350" y="387" width="780" height="15" rx="7.5" fill="#d9dde0"/>
+  <rect x="350" y="450" width="760" height="15" rx="7.5" fill="#d9dde0"/><rect x="350" y="483" width="660" height="15" rx="7.5" fill="#d9dde0"/>
+  <rect x="350" y="546" width="715" height="15" rx="7.5" fill="#d9dde0"/><rect x="350" y="579" width="780" height="15" rx="7.5" fill="#d9dde0"/>
+  <rect x="350" y="643" width="640" height="15" rx="7.5" fill="#d9dde0"/><rect x="350" y="676" width="735" height="15" rx="7.5" fill="#d9dde0"/>
+  <!-- The selection remains visibly in the host document -->
+  <rect x="350" y="740" width="628" height="43" rx="7" fill="#b8d8f6" opacity=".88"/>
+  <text x="365" y="768" font-family="-apple-system, BlinkMacSystemFont, Arial" font-size="17" fill="#1e3e5a">The main risk is that release timing is still unconfirmed.</text>
+  <!-- Conversation emerges from a soft local fade, not a separate glass panel -->
+  <rect x="1052" y="159" width="472" height="612" rx="72" fill="#ffffff" fill-opacity=".66" filter="url(#cloud)"/>
+  <rect x="1080" y="190" width="416" height="540" rx="35" fill="#ffffff" fill-opacity=".24"/>
+  <!-- User context belongs inside the turn, not in panel chrome -->
+  <text x="1111" y="239" font-family="-apple-system, BlinkMacSystemFont, Arial" font-size="13" font-weight="600" fill="#6b737c">You</text>
+  <rect x="1110" y="258" width="5" height="55" rx="2.5" fill="#0a84ff" fill-opacity=".7"/>
+  <rect x="1122" y="258" width="324" height="55" rx="10" fill="#87bff5" fill-opacity=".18"/>
+  <text x="1137" y="282" font-family="-apple-system, BlinkMacSystemFont, Arial" font-size="14" fill="#35536b">“The main risk is that release timing is</text>
+  <text x="1137" y="302" font-family="-apple-system, BlinkMacSystemFont, Arial" font-size="14" fill="#35536b">still unconfirmed.”</text>
+  <text x="1111" y="347" font-family="-apple-system, BlinkMacSystemFont, Arial" font-size="17" fill="#2e3439">Make this clearer for the team.</text>
+  <!-- Response sits directly on glass; no assistant bubble -->
+  <text x="1111" y="404" font-family="-apple-system, BlinkMacSystemFont, Arial" font-size="13" font-weight="600" fill="#6b737c">Sotto</text>
+  <text x="1111" y="439" font-family="-apple-system, BlinkMacSystemFont, Arial" font-size="17" font-weight="600" fill="#20262b">The release date is still unconfirmed,</text>
+  <text x="1111" y="465" font-family="-apple-system, BlinkMacSystemFont, Arial" font-size="17" font-weight="600" fill="#20262b">which is the main risk to the plan.</text>
+  <text x="1111" y="506" font-family="-apple-system, BlinkMacSystemFont, Arial" font-size="15" fill="#535b63">This keeps the point direct and names the</text>
+  <text x="1111" y="528" font-family="-apple-system, BlinkMacSystemFont, Arial" font-size="15" fill="#535b63">impact without adding a new claim.</text>
+  <!-- The composer remains the one tangible Liquid Glass control -->
+  <g filter="url(#shadow)"><rect x="1100" y="640" width="378" height="70" rx="22" fill="#ffffff" fill-opacity=".67" stroke="#fff" stroke-opacity=".94"/></g>
+  <circle cx="1135" cy="675" r="15" fill="#596b78" fill-opacity=".12"/>
+  <path d="M1129 675h12M1135 669v12" fill="none" stroke="#52626d" stroke-width="1.6" stroke-linecap="round"/>
+  <text x="1162" y="681" font-family="-apple-system, BlinkMacSystemFont, Arial" font-size="16" fill="#8b939a">Ask a follow-up…</text>
+</svg>
