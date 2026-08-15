@@ -1,0 +1,49 @@
+# macOS
+.DS_Store
+
+# Xcode
+xcuserdata/
+*.xcuserstate
+DerivedData/
+build/
+*.hmap
+*.ipa
+*.dSYM.zip
+*.xcscmblueprint
+*.xccheckout
+
+# Swift Package Manager
+.build/
+.swiftpm/
+Packages/
+Package.resolved
+
+# Sparkle — the EdDSA private key never enters the repo (spec §10.6).
+# Signing is mandatory; a leaked key means an updater that ships arbitrary code.
+*.pem
+dsa_priv.pem
+eddsa_priv*
+
+# Never commit model weights or user content.
+# Sotto stores both outside the repo at runtime — models in the scanned models
+# directory (§7.4), chats and audio in Application Support (§9.1, §9.2) — so
+# these patterns are a backstop against a stray copy, not the primary defence.
+# Weights are gigabytes and belong to Hugging Face or Ollama (§7.4).
+# Audio and transcripts are the user's speech; principle 1 says no content
+# leaves the machine, and a git remote is off the machine.
+*.safetensors
+*.gguf
+*.mlmodelc/
+*.mlpackage/
+models/
+Models/
+*.opus
+*.wav
+*.m4a
+chats/
+recordings/
+
+# Secrets — the Tavily key (§6.2) lives behind one config surface, not in git
+*.env
+.env.local
+Secrets.plist
