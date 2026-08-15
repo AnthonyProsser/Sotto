@@ -28,7 +28,7 @@ Anthony folds `DECISIONS.md` entries back into the real spec in `Documents/Sotto
 
 **When Anthony names a feature to build, the first move is never code and never the build-order slice on its own. It is a search.**
 
-**Find every mention before you start.** A feature is almost never described in one place, and the four documents each hold a different part of it:
+**Find every mention before you start.** A feature is almost never described in one place, and the six documents each hold a different part of it:
 
 | Where | What it holds |
 |---|---|
@@ -36,6 +36,8 @@ Anthony folds `DECISIONS.md` entries back into the real spec in `Documents/Sotto
 | `docs/sotto-build-order.md` | Which slice owns it, what it depends on, and the **Done when** line that defines finished |
 | `docs/sotto-tokens.md` | Any locked measurement, usually in §6 before its slice converts it to a row |
 | `DECISIONS.md` | Anything already overturned. **Read this before the spec, not after** — it is newer, and a `No` in its last column means the spec copy is wrong about that thing right now |
+| `docs/Design.pdf` | What the surface looks like at real size, and how it sits against the rest of the screen. Its numbers are already in `sotto-tokens.md` §6 — go there for those. **§2.1** |
+| `docs/sotto-chat-response-concept.svg` | The anatomy of a chat turn, and nothing else. Not locked, not measured, canonical nowhere. **§2.1** |
 
 Search **every name the feature travels under** — surface, gesture, setting, token role, spec section. The overlay is also "the compose bar" and "decision 04"; dictation is also "push-to-talk" and "§4.1." A feature found in one place is a feature half-read.
 
@@ -65,7 +67,7 @@ Where it goes: working and process rules near §0; anything with a technical rea
 
 ## 1. Where the project actually is
 
-- **Slice 0 (design system) is substantially complete.** `sotto-tokens.md` exists as a template, and ten measurements are locked in `Design.pdf` (held in `Documents/Sotto/designs/`, not copied here).
+- **Slice 0 (design system) is substantially complete.** `sotto-tokens.md` exists as a template, and ten measurements are locked in `Design.pdf` — which as of 2026-08-15 **is** copied into `docs/`, alongside `sotto-chat-response-concept.svg`. See §2.1 for what each is for. (`docs/README.md` still says the PDF is not duplicated here; that line is now wrong and has to be fixed at source.)
 - **The Xcode project exists** — created 2026-08-15 from the AppKit (XIB) template: Swift Testing, no SwiftData, deployment target 26.5, bundle identifier `com.anthonyprosser.Sotto`. It lives in this repo alongside `docs/`, and **Claude Code creates and maintains it from here.** An earlier rule reserved that for Anthony so the project file would be "exactly what Xcode wrote" — that assumed a reader who could tell the difference, which is not the case.
 - **No feature Swift has been written yet.** What exists is template scaffolding: `AppDelegate.swift`, `MainMenu.xib`, and two empty test targets.
 - **Slice 1 (Shell) is next.**
@@ -111,6 +113,54 @@ Two items are still open inside slice 0 — see §7, Known gaps. Neither blocks 
 **Handoff rule: components name the role, never the value.** `surface.raised`, not `#2A2A2E`. Where the role is tier 1, name the system API in the same breath — `surface.raised` → `.controlBackgroundColor`. Do this **even when the row does not exist yet**; naming a role with no value is exactly how the lazy rule stays workable.
 
 > **The token sheet's §6 is where decided-but-unbuilt values live.** `sotto-tokens.md` §1 and §2 are deliberately empty; §6 holds every measurement locked in `designs/Design.pdf` until its slice converts it into a row. If you need a number for a surface you are building, look in §6 before concluding nothing has been decided. Its slice numbers are current as of 2026-08-13 and match this build order.
+
+---
+
+## 2.1 The two design files — open them for shape, never for numbers
+
+`docs/` holds two non-text files, both byte-identical copies of `Documents/Sotto/designs/` (verified 2026-08-15 by `md5`), both **read-only under §0 like everything else in that directory**. They are not interchangeable and they do not carry the same authority.
+
+| File | Open it for | Never use it for |
+|---|---|---|
+| `Design.pdf` | **Proportion, and the composed screen.** The bar against a real window, the HUD at real size, the menu bar glyph at 18 pt, the four decisions beside each other. This is the "judge proportion from a mockup" half of §14.9 | **Numbers.** Every measurement in it is already in `sotto-tokens.md` §6, with its ratio and its slice. A number read off the PDF arrives with neither |
+| `sotto-chat-response-concept.svg` | **The anatomy of a chat turn** — speaker labels, how a sent selection is drawn, how the reply is set. Nothing else in the project draws this | **Numbers, and decision 04's shape.** Nothing in it is locked, dated, or transcribed anywhere |
+
+### `Design.pdf` — four locked decisions, fully transcribed
+
+Four pages, locked **2026-08-11**. Every measurement was folded into `sotto-tokens.md` §6 on 2026-08-13, which is why the PDF is a **source rather than a dependency**: you can build every one of these slices without opening it.
+
+| Decision | Covers | Converts in | Transcribed to |
+|---|---|---|---|
+| 01 Overlay bar | 600 × 52 bar, radius 16, bottom-anchored at 118 pt, the 1 pt @ 15 % stroke ceiling | Slice **9** | §6.1 |
+| 02 Waveform and HUD | 12 bars, `v^0.5`, 36 pt HUD, width-follows-string with six locales measured, 8 Hz Reduce Motion | Slice **3** | §6.2 |
+| 03 Icons | 18 × 18 canvas, one capsule, outline-to-fill, 1.5 pt stroke floor | Slice **1** | §6.3 |
+| 04 In-app chat | 560 pt full-height wash, 390 × 81 composer, no chat picker | Slice **10** | §6.4 |
+| 05 What the mockups approximate | Corners, material, motion, backdrop, content — the five things the renderings get wrong | Every slice | §6.6 |
+
+**Page 5 is the page to actually read.** The other four are settled and transcribed; page 5 is the standing warning that the PDF is a browser rendering — circular arcs where the build has continuous curves, a flat white fill over a backdrop blur where the build has refraction and specular edge and adaptive tint, decorative CSS keyframes where the build has 60 Hz input, six masked blur passes where the build has one variable-radius blur. **Read every percentage in it as a starting tint, not a recipe.** Reading page 5 and skipping the rest is the correct use of this file when you are in Swift.
+
+Note the assumed metrics it inherits — 1512 × 982 pt screen, 24 pt menu bar, 84 pt Dock. Every ratio quoted against a screen dimension carries those assumptions, which is the whole substance of §7 gap 2.
+
+### `sotto-chat-response-concept.svg` — one concept, canonical nowhere
+
+A single 1600 × 1000 drawing: Sotto's chat over a host app (Notes), the user's selection still lit in the document behind it. **No document in this project referenced it before this section** — not the spec, not the build order, not the token sheet, not `DECISIONS.md`. It is undated in prose and locked by nothing. Treat it as a sketch that survived, not as a decision.
+
+**It is not to scale, and this is the trap.** Its viewBox is 1600 × 1000, not the 1512 × 982 pt the PDF assumes, and its composer is 378 × 70 at radius 22 where decision 04 locks 390 × 81 at radius 18 — different absolute values *and* a different radius-to-height ratio. **No number in this file is a measurement.** If you want a number for the chat, §6.4 has it.
+
+**What it holds that nothing else does — the turn.** The spec says a sent selection becomes "a new highlighted block mid-chat" (§5) and that the Chat pane renders "highlighted blocks" (§7.14), and then never says what either looks like. This is the only drawing:
+
+- **Speaker labels**, small and grey — `You`, `Sotto` — above each turn.
+- **The sent selection as a quoted block**: an accent rule down the left edge, a faint accent-tinted fill behind it, the quoted text in a smaller size than the message. It sits *inside* the user's turn, above the instruction. This is the post-send form of the chip in §5's overlay flow, not a competing idea.
+- **No assistant bubble.** The reply is set directly on the surface. Answer first in semibold at the message size, reasoning beneath it a step smaller and lighter. Only the user's turn gets a container — which is what makes the reply read as the surface's own content rather than as another party's message.
+
+That asymmetry is worth keeping whatever happens to the wash. It is also the one thing here that no other document can be checked against.
+
+**Where it contradicts, and what to do about it.** Two, both feeding §7 — put them to Anthony per §0.1, and do not let the drawing settle either:
+
+1. **The wash.** It draws a **local blurred fade** — a soft ~470 × 610 bloom around the conversation, floating in the upper-right of the host window and stopping well short of the bottom. Decision 04 locks a **560 pt full-height edge wash**. Spec §5.8 describes a **bounded floating panel**. That is now **three** shapes for one surface, and §7 gap 1 says two. The SVG's own comment calls it "a soft local fade, not a separate glass panel," which reads as an argument against the panel rather than against the wash — but it is an argument, not a decision.
+2. **The send button.** It draws the `+` and **no send button at all**, where decision 04 draws a filled 26 pt accent circle and §5.8 says the button is present but must not be the loudest thing in the bar. The composer is drawn empty, so this may be a hidden-until-non-empty state rather than a deletion — the drawing does not say. Either way it is a third position in §7 gap 3.
+
+**Verdict: the PDF is a locked source you rarely need to open; the SVG is an unlocked argument you should read once before slice 9 or 10 and cite to Anthony, never build from.**
 
 ---
 
@@ -239,9 +289,13 @@ Three things are genuinely undecided. If a slice needs one, **ask Anthony**. Inv
 
 **1. Decision 04 — the in-app chat — has no home in the spec.** `designs/Design.pdf` locks an edge-anchored, full-height wash with no panel edge, no chat picker, and a 390 x 81 pt glass composer (`sotto-tokens.md` §6.4). Spec §5.8 describes something different: a bounded floating panel, 600 pt bar, growth to 180 pt, cap at the lesser of 720 pt and 70% of usable height. They may be one surface in two states or two surfaces; **the spec does not say, because it predates the decision.** Slice 9 or 10 has to reconcile them, and the reconciliation belongs in §5 rather than in the token sheet. Do not pick one and build it.
 
+**There is now a third shape, and it is the one nothing else records.** `docs/sotto-chat-response-concept.svg` draws a **local blurred fade** around the conversation — not full height, not an edge wash, no panel edge either — with the composer floating in it. So: bounded panel (§5.8), full-height wash (decision 04), local fade (the SVG). The SVG is not locked and carries no measurements (§2.1), so it does not outrank the other two; it is evidence that the question was still live after the PDF was drawn. **The reconciliation is now three-way.** The SVG's turn anatomy — speaker labels, quoted selection, no assistant bubble — is separable from the wash question and survives whichever container wins.
+
 **2. The two anchor numbers are still not constants, but the overlay's now decomposes.** Design.pdf quotes the overlay's **118 pt** bottom offset alongside an **84 pt Dock** and a **34 pt clearance**, each with its own ratio — 118 = 84 + 34, which is the shape of an invariant rather than a coincidence. The likely token is therefore *"clears the Dock's current height by 34 pt (0.654 bar heights),"* not the constant. **Two cases that decomposition does not cover:** a Dock positioned left or right, where there is no bottom occlusion at all, and an auto-hidden Dock, where occlusion is zero until it is not. The HUD's **8%** top position does not decompose — it came from an assumed 1512 x 982 screen with a 24 pt menu bar, and a notched MacBook Pro menu bar is taller than 24 pt. Decide per anchor whether it is a fixed value or a rule, and record which.
 
 **3. The send button's volume contradicts §14.3.** §14.3 rejects "a saturated send button — the loudest thing in Gemini's bar and the first thing that makes it feel intrusive," and §5.8 restores the button but explicitly "not its volume." Design.pdf decisions 01 and 04 both draw it as a **filled 26 pt accent circle**, the most saturated element in either surface. Either the drawn treatment is what §14.3 warned against, or §14.3's objection was to size or position rather than fill. **Slice 9 decides, and whichever way it goes, one of the two documents needs amending.** Do not resolve this by picking the drawing over the spec because the drawing is more recent.
+
+`sotto-chat-response-concept.svg` takes a third position: it draws the `+` and **no send button**. Its composer is empty, so this may be hide-until-non-empty rather than deletion — the drawing does not say, and there is no prose with it to ask. Worth putting to Anthony alongside the other two, not worth inferring from.
 
 A further slice-0 item is open but gates nothing: the **app icon layer breakdown** for Icon Composer. The mark is locked — two capsules forming an S, lower occluding upper. The layer split is an asset decision, not a token.
 
