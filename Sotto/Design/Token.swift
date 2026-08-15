@@ -50,11 +50,18 @@ enum Token {}
 /// `.selectedContentBackgroundColor`.
 extension Token {
     enum Surface {
-        /// The settings window's background.
+        /// The main window's background.
         ///
-        /// Tier 1 → `NSColor.windowBackgroundColor`. First consumer: the settings
-        /// window, slice 1. Picks up the window-background wallpaper tint macOS 26
-        /// applies, which a drawn fill would not.
+        /// Tier 1 → `NSColor.windowBackgroundColor`. Picks up the window-background
+        /// wallpaper tint macOS 26 applies, which a drawn fill would not.
+        ///
+        /// **Currently has no consumer, which by the lazy rule means it should not
+        /// be here.** It was authored for "the settings window"; settings became a
+        /// page inside the main window the same day, and the shell that shipped in
+        /// slice 1 names no color at all — the sidebar, the list, the picker, and
+        /// the empty states are system components that already resolve to the right
+        /// semantic values. Left in place rather than deleted because a logged
+        /// decision put it here; see `DECISIONS.md`, 2026-08-15.
         static var window: Color { Color(nsColor: .windowBackgroundColor) }
     }
 }
