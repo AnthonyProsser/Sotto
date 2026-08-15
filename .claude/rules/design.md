@@ -128,7 +128,7 @@ Prefer `.buttonStyle(.glass)` or `.glassProminent` over custom glass buttons. Al
 
 ### 6.6 AppKit
 
-AppKit's surface is narrower than SwiftUI's. Open issue 2 decides whether floating views use SwiftUI in an `NSPanel`; that would require each role in `Color` and `NSColor` forms.
+AppKit's surface is narrower than SwiftUI's, which is why issue 2 was closed the way it was (2026-08-15): **every view is SwiftUI, so glass is always the SwiftUI API above and this table applies only to the `NSWindow`/`NSPanel` hosts.** Each §14.2 role therefore has one `Color` form and no `NSColor` twin.
 
 | API | Use |
 |---|---|
@@ -293,7 +293,7 @@ Ask; do not settle. Read `.claude/rules/open-questions.md` before slices 9, 10, 
 | Gap 1 | Chat shape: bounded panel, full-height wash, or local fade |
 | Gap 2 | Overlay 118 pt and HUD 8%: fixed value or rule |
 | Gap 3 | Send-button volume |
-| Issue 2 | SwiftUI/AppKit split and `Color`/`NSColor` forms |
+| ~~Issue 2~~ | **Closed** — all SwiftUI, one `Color` per role (§6.6) |
 | Issue 5 | Bare compose-bar growth/cap |
 
 The app-icon layer split is also open but does not block work.
