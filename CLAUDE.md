@@ -56,7 +56,8 @@ Search under **every name the feature travels under** — the surface, the gestu
 ## 1. Where the project actually is
 
 - **Slice 0 (design system) is substantially complete.** `sotto-tokens.md` exists as a template, and ten measurements are locked in `Design.pdf` (held in `Documents/Sotto/designs/`, not copied here).
-- **No Swift has been written yet.** Not a line. There is no Xcode project in this directory at the time of writing; Anthony creates it himself so the project file is exactly what Xcode wrote.
+- **The Xcode project exists** — created 2026-08-15 from the AppKit (XIB) template: Swift Testing, no SwiftData, deployment target 26.5, bundle identifier `com.anthonyprosser.Sotto`. It lives in this repo alongside `docs/`, and **Claude Code creates and maintains it from here.** An earlier rule reserved that for Anthony so the project file would be "exactly what Xcode wrote" — that assumed a reader who could tell the difference, which is not the case.
+- **No feature Swift has been written yet.** What exists is template scaffolding: `AppDelegate.swift`, `MainMenu.xib`, and two empty test targets.
 - **Slice 1 (Shell) is next.**
 
 Two items are still open inside slice 0 — see §7, Known gaps. Neither blocks slice 1.
@@ -216,7 +217,7 @@ Ordering rule throughout: nothing depends on something built later, and every sl
 
 Working rhythm: design the slice in Claude Design, screenshot it, hand it over, build it in Swift, use it, move on. When designs arrive, expect them to be wrong about material in four specific ways — corners render as circular arcs, blur is not refraction, there is no adaptive tint, there is no specular edge. **Judge proportion from a mockup; judge material only in Swift (§14.9).**
 
-**Current position: slice 0 substantially complete, no Swift written, slice 1 (Shell) is next.**
+**Current position: slice 0 substantially complete, Xcode project scaffolded and building, no feature Swift written, slice 1 (Shell) is next.**
 
 Slice 1 builds: `.accessory` at launch, the §10.1 `NSMenu` with stubbed submenus, the settings window on `Cmd+,`, the activation-policy flip with the overlay guard, both menu bar icon states, the idle/not-idle observable, and the token layer as a thin mapping — **no theme struct**, but the indirection must exist so the inherited-vs-authored boundary stays auditable in one file.
 
