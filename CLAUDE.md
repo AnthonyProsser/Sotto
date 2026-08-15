@@ -37,19 +37,29 @@ Anthony folds `DECISIONS.md` entries back into the real spec in `Documents/Sotto
 | `docs/sotto-tokens.md` | Any locked measurement, usually in §6 before its slice converts it to a row |
 | `DECISIONS.md` | Anything already overturned. **Read this before the spec, not after** — it is newer, and a `No` in its last column means the spec copy is wrong about that thing right now |
 
-Search under **every name the feature travels under** — the surface, the gesture, the setting, the token role, the spec section. These documents cross-reference heavily, and a feature found in one place is a feature half-read. The overlay is also "the compose bar" and "decision 04"; dictation is also "the gesture," "push-to-talk," and "§4.1."
+Search **every name the feature travels under** — surface, gesture, setting, token role, spec section. The overlay is also "the compose bar" and "decision 04"; dictation is also "push-to-talk" and "§4.1." A feature found in one place is a feature half-read.
 
-**Then compare what Anthony said against what you found, and surface the differences before writing anything.**
+**Then put every contradiction between what Anthony said and what you found to him, before writing anything. Do not resolve it silently in either direction.** A spoken instruction is compressed: it carries the change he is thinking about, not the three decisions elsewhere that depended on the old shape. Acting on it unasked is how a decision gets made by accident — the spec's reasoning discarded without anyone noticing, including him. Deferring to the spec instead is the opposite failure, already ruled out by §0's corollary.
 
-**Ask. Do not resolve it silently in either direction.** A spoken instruction is compressed: it carries the change he is thinking about, not the three decisions elsewhere that depended on the old shape. Acting on it without asking is how a decision gets made by accident — the spec's reasoning is discarded without anyone noticing it was discarded, including him. Deferring to the spec instead is the opposite failure and is already ruled out by §0's corollary.
+**The default answer is that his new instruction wins**, and that is not a reason to skip the question. It exists to catch the constraint he had forgotten the old text was carrying. Expect most to end in "yes, the new one," and ask anyway.
 
-**The default answer is that Anthony's new instruction wins.** It usually is the update. **That is not a reason to skip the question.** The question is cheap, and it exists to catch the case where he had forgotten a constraint that the old text was carrying — not to challenge him. Expect most of these to end in "yes, the new one," and ask anyway.
+**Ask well:** name the contradiction, cite the section, say which way you would go and why. All of them together, once, before starting — not one per hour as you hit them.
 
-**A good question names the contradiction, cites the section, states which way you would go and why, and asks him to confirm.** One question with a recommendation, not a survey of options. If several contradictions surface, ask them together, once, before starting — not one per hour as you hit them.
+**If nothing contradicts, say what you found and get on with it.** Silence from the documents means the decision is yours to make and note. Then log per §0 and build.
 
-**If nothing contradicts, say what you found and get on with it.** This is a rule about contradictions, not a requirement to turn every feature into an interview. Silence from the documents is an answer; it means the decision is yours to make and note.
+---
 
-**Then log per §0 and build.**
+## 0.2 Standing instructions — write them down, here, yourself
+
+**If Anthony says it twice, or says "always," "from now on," "make sure you," or "remember to," it is a standing instruction and it belongs in this file.** Add it in the session it was said, and say that you did.
+
+A session ends and takes its context with it. An instruction given three times across three sessions was never written down once — the repetition is the symptom, and Anthony should not have to be the persistence layer for his own project.
+
+Where it goes: working and process rules near §0; anything with a technical reason attached in §3; anything cut in §4.
+
+**Not the same as `DECISIONS.md`.** This file holds how to work and what the constraints are. `DECISIONS.md` holds decisions that contradict, extend, or resolve the spec. A rule about how you behave is never a `DECISIONS.md` entry; a change to what Sotto does is never a rule here.
+
+**Keep it true.** When something this file asserts stops being true — a status, a path, a rule superseded — fix it in the same session it changed. §0.1 sends future sessions here to research; a confident false statement is worse than a missing one.
 
 ---
 
