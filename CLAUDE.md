@@ -18,9 +18,38 @@ Decisions get made during build sessions. That is normal and expected; a spec th
 
 Anthony folds `DECISIONS.md` entries back into the real spec in `Documents/Sotto`, then re-syncs `docs/`. Until he does, **the copies are out of date**, and you should say so whenever a decision from the current session contradicts them. A stale copy that everyone knows is stale is fine; a stale copy that reads as current is how a build goes wrong three slices later.
 
-**Corollary, stated plainly: if `docs/sotto-spec.md` and something Anthony said in this session disagree, Anthony wins.** The spec is a snapshot of his reasoning, not an authority over it. Follow what he said, and log it in `DECISIONS.md` so the snapshot catches up.
+**Corollary, stated plainly: if `docs/sotto-spec.md` and something Anthony said in this session disagree, Anthony wins.** The spec is a snapshot of his reasoning, not an authority over it. **But he wins on the record, not by default** — §0.1 governs how you get there. Put the contradiction to him first, then follow what he said, then log it in `DECISIONS.md` so the snapshot catches up.
 
 **The only files you write in this repo without asking:** Swift sources, project files, `DECISIONS.md`. Everything under `docs/` is read-only.
+
+---
+
+## 0.1 Before building a feature — read first, ask second, build third
+
+**When Anthony names a feature to build, the first move is never code and never the build-order slice on its own. It is a search.**
+
+**Find every mention before you start.** A feature is almost never described in one place, and the four documents each hold a different part of it:
+
+| Where | What it holds |
+|---|---|
+| `docs/sotto-spec.md` | The behaviour and, more importantly, the reasoning — what was rejected and why |
+| `docs/sotto-build-order.md` | Which slice owns it, what it depends on, and the **Done when** line that defines finished |
+| `docs/sotto-tokens.md` | Any locked measurement, usually in §6 before its slice converts it to a row |
+| `DECISIONS.md` | Anything already overturned. **Read this before the spec, not after** — it is newer, and a `No` in its last column means the spec copy is wrong about that thing right now |
+
+Search under **every name the feature travels under** — the surface, the gesture, the setting, the token role, the spec section. These documents cross-reference heavily, and a feature found in one place is a feature half-read. The overlay is also "the compose bar" and "decision 04"; dictation is also "the gesture," "push-to-talk," and "§4.1."
+
+**Then compare what Anthony said against what you found, and surface the differences before writing anything.**
+
+**Ask. Do not resolve it silently in either direction.** A spoken instruction is compressed: it carries the change he is thinking about, not the three decisions elsewhere that depended on the old shape. Acting on it without asking is how a decision gets made by accident — the spec's reasoning is discarded without anyone noticing it was discarded, including him. Deferring to the spec instead is the opposite failure and is already ruled out by §0's corollary.
+
+**The default answer is that Anthony's new instruction wins.** It usually is the update. **That is not a reason to skip the question.** The question is cheap, and it exists to catch the case where he had forgotten a constraint that the old text was carrying — not to challenge him. Expect most of these to end in "yes, the new one," and ask anyway.
+
+**A good question names the contradiction, cites the section, states which way you would go and why, and asks him to confirm.** One question with a recommendation, not a survey of options. If several contradictions surface, ask them together, once, before starting — not one per hour as you hit them.
+
+**If nothing contradicts, say what you found and get on with it.** This is a rule about contradictions, not a requirement to turn every feature into an interview. Silence from the documents is an answer; it means the decision is yours to make and note.
+
+**Then log per §0 and build.**
 
 ---
 
