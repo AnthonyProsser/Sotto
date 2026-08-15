@@ -47,4 +47,4 @@ Do not build past one of these without asking — `.claude/rules/open-questions.
 | **10** | Decision 04's shape, three-way (gap 1) |
 | **11** | Cleanup reasoning toggle and default (issue 4) |
 | **12** | MCP Swift SDK vs. protocol version (issue 1) — **decide before the first line** |
-| Any | SwiftUI / AppKit split (issue 2); focus change mid-transcription (issue 3) |
+| Any | Focus change mid-transcription (issue 3). Issue 2 is closed — all SwiftUI |

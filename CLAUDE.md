@@ -26,6 +26,8 @@ Anthony folds `DECISIONS.md` entries back into the real spec in `Documents/Sotto
 
 **The only files you write in this repo without asking:** Swift sources, project files, `DECISIONS.md`, this file, and `.claude/rules/*`. Everything under `docs/` is read-only.
 
+**That last sentence is enforced, not just asserted.** `.claude/settings.json` denies `Edit` and `Write` on `docs/**`, so a refusal there is the rule working rather than a broken tool — do not route around it, and do not ask for it to be lifted. Reading is unaffected. The one sanctioned write into `docs/` is Anthony's `cp` re-sync in `docs/README.md`, which is a shell command and therefore untouched by the deny. The prose above stays because the deny cannot explain *why*, and §0's reasoning is what stops the workaround.
+
 ---
 
 ## 0.1 Before you build — read first, ask second, build third
@@ -36,14 +38,15 @@ Anthony folds `DECISIONS.md` entries back into the real spec in `Documents/Sotto
 
 | About to | Open |
 |---|---|
-| Put pixels on screen — a view, a material, a radius, a mockup conversion, **any numeric or hex literal in a view** | `.claude/rules/design.md`. **The whole of it, and nothing else** — general macOS 26 practice, the ten failure modes, the verified Liquid Glass and window-chrome APIs, the build-and-screenshot loop, Sotto's tokens, the two design files, and the review to run before saying it's done |
+| Put pixels on screen — a view, a material, a radius, a mockup conversion, **any numeric or hex literal in a view** | `.claude/rules/design.md`, **all 351 lines of it.** Authoring or changing what is drawn is the case it exists for, and its fast path (§1 → §3 → §9) is a starting order, not a licence to stop there |
+| Edit view code **without changing what is drawn** — a rename, a binding, an `isHidden` fix | `design.md`'s §14 grep, and whichever sections its own index sends you to. A non-visual edit does not earn the full read; **`CLAUDE.md` §0.4 still applies** — if the result looks different, you were wrong about it being non-visual |
 | Touch the event tap, a gesture, a hotkey, Escape, the activation policy, or writing text into another app | `.claude/rules/input-and-insertion.md` |
 | Touch capture, chunking, transcription, word timings, seek, or the HUD's content | `.claude/rules/audio-and-transcription.md` |
 | Load a model, estimate memory, add an outbound connection, or touch MCP or the updater | `.claude/rules/models-and-network.md` |
 | Start a slice, or land work in more than one | `.claude/rules/slices.md` |
 | Touch anything in §2's list of open questions | `.claude/rules/open-questions.md` — **and ask, do not decide** |
 
-Work that spans two areas opens both. Work that fits none of them proceeds on this file alone — and if that keeps happening in one area, that area wants a rule file (§0.2).
+Work that spans two areas opens both. **Beyond two, the slice is the router, not this table** — open `rules/slices.md`, find the owning slice, and add domain rules only as the work actually reaches them; a feature touching four areas does not open four files up front. Work that fits none of them proceeds on this file alone — and if that keeps happening in one area, that area wants a rule file (§0.2).
 
 ### 2. The project documents, for the feature itself
 
@@ -68,7 +71,13 @@ Work that spans two areas opens both. Work that fits none of them proceeds on th
 
 **Ask well:** name the contradiction, cite the section and the file, say which way you would go and why. All of them together, once, before starting — not one per hour as you hit them.
 
-**If nothing contradicts, say what you found and get on with it.** Silence from the documents means the decision is yours to make and note. Then log per §0 and build.
+**Three tiers, because "ask when unsure" turns into asking about everything.** Sort what you found before you interrupt:
+
+1. **The documents decide it** → follow them. No question, no report.
+2. **Nothing decides it, and the choice is implementation-local** — a name, a file split, an order of operations, anything invisible in the built app → **decide it yourself** using the nearest existing convention, and note it in one clause. Silence from the documents is permission, not a blocker.
+3. **A contradiction, one of §2's eight, or a choice a user would notice** — behaviour, wording, a surface, a number that ships → **ask.** These are the ones where a wrong guess looks settled.
+
+**Report the search only when it changed something.** A contradiction found, a decision taken under tier 2, a document that turned out stale — those go in the reply. A search that confirmed what you already intended to do does not; do the work instead of narrating the reading.
 
 ---
 
@@ -111,14 +120,37 @@ This is here rather than in `rules/design.md` because the case that produced it 
 
 ---
 
-## 1. Where the project actually is
+## 0.5 Change what was asked for, and nothing adjacent
 
-- **Slice 0 (design system) is substantially complete.** `sotto-tokens.md` exists as a template, and ten measurements are locked in `Design.pdf` — which as of 2026-08-15 **is** copied into `docs/`, alongside `sotto-chat-response-concept.svg`. (`docs/README.md` still says the PDF is not duplicated here; that line is now wrong and has to be fixed at source.)
-- **The Xcode project exists** — created 2026-08-15 from the AppKit (XIB) template: Swift Testing, no SwiftData, deployment target 26.5, bundle identifier `com.anthonyprosser.Sotto`. It lives in this repo alongside `docs/`, and **Claude Code creates and maintains it from here.** An earlier rule reserved that for Anthony so the project file would be "exactly what Xcode wrote" — that assumed a reader who could tell the difference, which is not the case.
-- **No feature Swift has been written yet.** What exists is template scaffolding: `AppDelegate.swift`, `MainMenu.xib`, and two empty test targets.
-- **Slice 1 (Shell) is next** — what it builds is in `rules/slices.md` §2.
+**Touch the code the request needs. Leave the rest alone, including the parts that are wrong.** The failure is never one big unasked rewrite; it is the rename done in passing, the reformat that came free with the editor, the third file "tidied while I was in there." Each is defensible alone. Together they produce a diff where the one line that changed behaviour is indistinguishable from forty that did not, and the review that would have caught the bug does not happen.
 
-Two slice-0 items are still open; neither blocks slice 1. See `rules/open-questions.md`.
+**Match the file you are in, not the style you would choose.** Naming, comment density, and structure are set by the surrounding code. A file written in one idiom and edited in another is worse than a file written badly and consistently.
+
+**This does not contradict §0.3's "delete on the way past" — read the boundary carefully.** Code that *your change* made dead belongs in your commit, because leaving it is how the codebase accumulates orphans nobody dares remove. Code that was already dead before you arrived is a separate change and gets proposed, not performed. The test is whether your edit is what killed it.
+
+**When you see something genuinely wrong outside your scope, say so and keep going.** One sentence in the reply beats a fix nobody asked for. Anthony decides what gets opened next; that is not a formality, because in this repo an "obvious" fix is routinely a decision the spec already argued about (§0.1).
+
+---
+
+## 0.6 State what would prove it worked, before writing it
+
+**A vague task is not a task yet. Settle what would prove it worked before writing it, then go and check.** For a slice, `docs/sotto-build-order.md` supplies the line — its **Done when** clause is the criterion and it is not optional. For anything else, decide one yourself. **Keep it to yourself unless it changes the scope**, or the task was loose enough that Anthony might have meant a different bar; §0.1's reporting rule holds here too. The criterion exists to steer the work, not to be announced before it.
+
+**Verification is running the thing. It is not re-reading your own diff.** Reasoning about whether code works is the same activity that produced the defect, so it cannot be the thing that catches it. Build it, launch it, screenshot it (`rules/design.md` §8), or write the test. Slices **2, 4, 5, and 7** have no design surface and therefore no screenshot loop — they still need a stated observation or a test, and "it compiles" is neither.
+
+**Assume the first attempt is wrong and leave room to find out.** The expensive failure mode is a long confident linear run that was mistaken at step two and never checked until step nine. Short loop, real output, adjust. This is the same instinct as §0.1's read-before-build, applied to the end of the work instead of the start.
+
+**One rejection worth keeping, in one line:** proposals to collapse `.claude/rules/*` back into this file have been made and refused twice, for the reason at the top of this file.
+
+---
+
+## 1. Where the project is — not stated here, on purpose
+
+**Slice 1 is in progress. For anything more specific than that, read `DECISIONS.md` newest-first and `git log`.** Between them they carry what has actually been settled and built; this file carried a summary of it for one day and was wrong about three things by the second — it claimed no feature Swift existed after `Sotto/Design/Token.swift` was committed, and it listed an open issue that a decision had already closed.
+
+**So the rule is: no status lines here, ever again.** Not a slice number, not a file inventory, not a "next up." A status line in the always-on layer is read as authority, updated by whoever remembers, and wrong the moment someone commits without opening this file. `DECISIONS.md` is append-only and dated, which is why it survives what this section could not.
+
+**Claude Code creates and maintains `Sotto.xcodeproj` from this repo.** An earlier rule reserved that for Anthony so the project file would be "exactly what Xcode wrote" — that assumed a reader who could tell the difference, which is not the case. Its settings live in the project file; do not restate them here either.
 
 ---
 
@@ -134,10 +166,11 @@ Five things that hold no matter what you are touching.
 
 **Predict, don't gate.** Hardware never gates a feature; it produces an estimate and an amber row. The one exception is model capability, and it gates on the model, not the machine. Detail in `rules/models-and-network.md` §1.
 
-**Eight things are undecided, and inventing an answer to one produces something that looks settled and is not.** Ask. Reasoning in `rules/open-questions.md`; which slice hits which in `rules/slices.md` §4.
+**Seven things are undecided, and inventing an answer to one produces something that looks settled and is not.** Ask. The names are here rather than behind the pointer because the failure is answering a question you did not know existed — a pointer only helps a reader who already suspects. Reasoning in `rules/open-questions.md`; which slice hits which in `rules/slices.md` §4.
 
 > Gaps: **1** the in-app chat's shape, three-way · **2** the overlay and HUD anchor numbers, value or rule · **3** the send button's volume.
-> Issues: **1** MCP Swift SDK vs. protocol version · **2** the SwiftUI / AppKit split · **3** focus change mid-transcription · **4** cleanup reasoning toggle and default · **5** bare compose bar growth.
+> Issues: **1** MCP Swift SDK vs. protocol version · **3** focus change mid-transcription · **4** cleanup reasoning toggle and default · **5** bare compose bar growth.
+> Numbers track spec §12 and never get renumbered. **Issue 2 (the SwiftUI / AppKit split) is closed** — every view is SwiftUI; AppKit holds the delegate, the status item, and the `NSWindow`/`NSPanel` hosts. See `DECISIONS.md`, 2026-08-15.
 
 ---
 
