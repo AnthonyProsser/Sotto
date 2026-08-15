@@ -65,6 +65,56 @@ Where it goes: working and process rules near §0; anything with a technical rea
 
 ---
 
+## 0.3 Before writing any Swift that draws — load the `macos-design` skill
+
+**`.claude/skills/macos-design/` is mandatory reading before any view code, not optional context.** Load it when writing or reviewing anything that puts pixels on screen, when converting a design into Swift, and before adding any numeric or hex literal to a view.
+
+**Why it exists:** Anthony's assessment on 2026-08-15 was that Claude is *quite bad at designing in Swift*. The diagnosis is specific and it is not taste — the model reaches for a **value** where macOS supplies an **API**, and stacks decoration where Apple picks one treatment and stops. The result compiles, runs, and looks like a web app rendered on a Mac. Every design rule in §2 and spec §14 assumes a reader who defers to the system by default; that assumption does not hold without the skill loaded.
+
+The skill carries three things this file does not:
+
+- `references/failure-modes.md` — ten concrete failures with the correction beside each. **The one to read if you read only one.**
+- `references/liquid-glass-api.md` — the macOS 26 glass API surface verified against Apple's docs, and the adjacent-but-wrong names that compile nowhere. These APIs postdate common training data, so recalling them is how you get `glassBackgroundEffect`
+- `references/window-chrome.md` — sidebars, toolbars, traffic lights, verified against the installed SDK headers. **The area where wrong code compiles, runs, and silently does nothing**, so there is no error to lead you back
+- `references/design-review.md` — a five-dimension review split into mechanical, visual, and judgment passes
+
+**You can see your own output — so look before you describe it.** Screen Recording and Accessibility are granted (verified 2026-08-15 by building, launching, and screenshotting a real window). An earlier version of this section and of the skill said otherwise; that was wrong. Geometry instrumentation — frame dumps, safe-area insets — verifies geometry and nothing else. Reporting it as though it were a look at the result is the specific failure that produced *"Rebuilt and running — the sidebar now goes top to bottom"* for a layout nobody had seen. Screenshot it, read the PNG, then say which claims came from the image and which came from the code.
+
+**The search found no off-the-shelf skill that fits.** The closest analogue, `wholiver/swiftui-design-skill`, mandates an authored hex palette, an 8 pt scale, and a `DesignTokens.swift` written up front — the exact move spec §14 rejects. It targets iOS 18 / macOS 15 and predates Liquid Glass. Reasonable skill, wrong project.
+
+**Its Part B restates this file's constraints, so the two must not drift.** If §2's token rules change, change the skill in the same session.
+
+**Verdict: the general macOS rules live in the skill, the project's law lives here, and where a generic Swift-design instinct disagrees with either, it loses.**
+
+---
+
+## 0.4 Least code, reused — Anthony asked for this by name
+
+**"I want the least amount of code possible to make the same amount of work. So basically as efficient as possible, and reuse code — do not build helper functions over and over again."** Said on 2026-08-15, with the explicit instruction that it be recorded in this file.
+
+What it means in practice:
+
+- **Before writing a helper, search for one.** The failure is not a bad helper; it is the third private `func padded(_:)` in the third file, each subtly different, none of them wrong enough to notice.
+- **A new file needs a reason.** So does a new type. Sotto is one app, not a framework, and the indirection budget is small.
+- **Delete on the way past.** Code that a change made dead goes in the same commit as the change.
+- **This does not license clever.** Fewest lines is not the goal — fewest *concepts* is. One well-named function used in four places beats a dense one-liner nobody can modify.
+
+**Where it collides with §2:** the token layer's indirection is required even though it costs lines, because §14.2's inherited-vs-authored boundary has to stay auditable in one file. That is a stated exception with a reason, which is the only kind that counts.
+
+---
+
+## 0.5 Do not flatten a visual detail the user liked
+
+**When a refactor changes how something looks, say so — even when appearance was not the point of the change.**
+
+The case that produced this rule: *"there's at one point where the app had a slight gradient or slight accent on the sidebar and I liked how that looks, because that's how all the other Mac apps and Apple creative apps look. Can you revert that change? I think at one point you added a line of code or changed it in some way that made it look entirely the same."* (2026-08-15.) Anthony had to notice the loss himself, then ask for an archaeology pass to find which edit caused it. Neither the loss nor the edit was ever announced.
+
+**Why it happens:** the change is real work with a stated purpose — restructuring the split view, moving the toolbar — and the visual side effect is invisible to a diff review that is checking whether the structure is right. Nobody lies; the appearance change simply is not on anyone's list.
+
+**How to apply.** Sotto's surfaces are mostly system-derived, so an unannounced appearance change usually means a semantic background, material, or a `.fullSizeContentView`-style flag got replaced by something flatter. When restructuring view code: screenshot before, screenshot after, and if they differ in any way you did not intend, **say it in the reply** rather than hoping it was fine. Per §0.3 you can now do this, which removes the last excuse for not doing it.
+
+---
+
 ## 1. Where the project actually is
 
 - **Slice 0 (design system) is substantially complete.** `sotto-tokens.md` exists as a template, and ten measurements are locked in `Design.pdf` — which as of 2026-08-15 **is** copied into `docs/`, alongside `sotto-chat-response-concept.svg`. See §2.1 for what each is for. (`docs/README.md` still says the PDF is not duplicated here; that line is now wrong and has to be fixed at source.)
