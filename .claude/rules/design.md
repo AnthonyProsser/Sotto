@@ -149,7 +149,7 @@ macOS 26 has rounder window chrome, larger controls, standard split-view resizin
 
 ### 6.9 App icons
 
-Build app icons in Icon Composer from simple overlapping semi-transparent layers. Do not bake masks, blur, shadows, or highlights; the system applies them and generates Default/Dark/Clear/Tinted. Keep the silhouette readable without color and centered within the rounded-rectangle mask. Sotto's mark is locked: two capsules forming an S, lower occluding upper; the layer split remains open (§13).
+Build app icons in Icon Composer from simple overlapping semi-transparent layers. Do not bake masks, blur, shadows, or highlights; the system applies them and generates Default/Dark/Clear/Tinted. Keep the silhouette readable without color and centered within the rounded-rectangle mask. Sotto's icon is **done and in the repo** at `Sotto/Sotto.icon` — two capsules forming an S, lower occluding upper, one layer each (`1-grey-top`, `2-grey-bottom`), shadow and translucency declared as group properties. Do not add an `.appiconset` beside it; the Icon Composer document is what generates the four appearances.
 
 ## 7. Window chrome
 
@@ -295,8 +295,6 @@ Ask; do not settle. Read `.claude/rules/open-questions.md` before slices 9, 10, 
 | Gap 3 | Send-button volume |
 | ~~Issue 2~~ | **Closed** — all SwiftUI, one `Color` per role (§6.6) |
 | Issue 5 | Bare compose-bar growth/cap |
-
-The app-icon layer split is also open but does not block work.
 
 ## 14. Before declaring design work done
 

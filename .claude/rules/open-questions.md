@@ -1,6 +1,6 @@
 # Open questions — do not invent answers to these
 
-**Eight things are genuinely undecided.** If your work needs one, **ask Anthony**. Inventing an answer produces something that looks settled and is not.
+**Seven things are genuinely undecided**, matching `CLAUDE.md` §2's count now that the app icon is closed. If your work needs one, **ask Anthony**. Inventing an answer produces something that looks settled and is not.
 
 `CLAUDE.md` §2 lists the titles so they stay visible without opening this file. The reasoning is here.
 
@@ -32,9 +32,9 @@ The HUD's **8 %** top position does not decompose — it came from an assumed 15
 
 `sotto-chat-response-concept.svg` takes a third position: it draws the `+` and **no send button**. Its composer is empty, so this may be hide-until-non-empty rather than deletion — the drawing does not say, and there is no prose with it to ask. Worth putting to Anthony alongside the other two, not worth inferring from.
 
-### Open but gating nothing — the app icon layer breakdown
+### ~~Open but gating nothing — the app icon layer breakdown~~ — **closed 2026-08-15**
 
-For Icon Composer. The mark is locked — two capsules forming an S, lower occluding upper. The layer split is an asset decision, not a token.
+One layer per capsule, `Sotto/Sotto.icon`. See `DECISIONS.md`. It was an asset decision, not a token, and it never gated anything.
 
 ---
 
