@@ -70,7 +70,9 @@ layer.cornerCurve = .continuous
 layer.cornerRadius = 16
 ```
 
-Do not use `.cornerRadius(_)` or `RoundedRectangle(cornerRadius:)` without `style:`. For nested surfaces use `outerRadius - inset`; use `ConcentricRectangle` when matching an enclosing/display corner.
+Do not use `.cornerRadius(_)` or `RoundedRectangle(cornerRadius:)` without `style:`.
+
+**`style: .continuous` only does something while the radius is under half the smaller dimension.** At `r = h/2` the continuous corner and the circular arc are the same curve — measured 2026-08-18, identical edge profiles — because no straight edge remains for the superellipse to blend into. A capsule written as `.rect(cornerRadius: h/2, style: .continuous)` passes §14's grep and still ships a circular arc. If a surface should read as a squircle, its radius has to be strictly less than half its height. For nested surfaces use `outerRadius - inset`; use `ConcentricRectangle` when matching an enclosing/display corner.
 
 ### 4.2 Real glass, not blur
 
@@ -98,21 +100,34 @@ Only two patterns exist:
 
 ## 6. Liquid Glass: verified API surface
 
-Verified against Apple documentation on 2026-05-30. Read this instead of recalling names. These do **not** exist: `glassBackgroundEffect`, `NSGlassView`, `.glassMaterial`, `.liquidGlass()`, `NSLiquidGlassView`, `GlassContainer`.
+Re-verified 2026-08-19 against the **installed SDK's** `SwiftUICore.swiftinterface`, not documentation — the declarations below are the ones the compiler sees. Note that the glass API lives in **SwiftUICore**, not SwiftUI, so grepping `SwiftUI.swiftinterface` for `glassEffect` returns nothing and does *not* mean the API is absent. These do **not** exist: `glassBackgroundEffect`, `NSGlassView`, `.glassMaterial`, `.liquidGlass()`, `NSLiquidGlassView`, `GlassContainer`.
+
+`Glass` has exactly five members — `.regular`, `.clear`, `.identity`, `.tint(Color?)`, `.interactive(Bool = true)`. There is no `.prominent`, and no `.thick`/`.thin` scale.
 
 ### 6.1 Applying glass
 
+There is one overload, and both parameters default:
+
 ```swift
-.glassEffect() // regular Glass, Capsule by default
+func glassEffect(_ glass: Glass = .regular, in shape: some Shape = DefaultGlassEffectShape()) -> some View
+```
+
+`DefaultGlassEffectShape` is a concrete `Shape`, **not** `Capsule` — pass the shape explicitly whenever the corner matters.
+
+```swift
 .glassEffect(in: .rect(cornerRadius: 16, style: .continuous))
 .glassEffect(.regular.tint(.orange).interactive())
 ```
+
+Pass the shape to `in:` rather than clipping afterwards. A later `.clipShape` cuts the specular edge and the rim refraction the glass drew outside the path.
 
 Apply glass after modifiers whose appearance it should capture.
 
 ### 6.2 Containers
 
-Multiple glass views require a `GlassEffectContainer(spacing:)`; it optimizes rendering and enables blending/morphing. `spacing` also controls morph distance.
+`GlassEffectContainer(spacing: CGFloat? = nil, content:)`. Multiple glass views require one; it optimizes rendering and enables blending/morphing, and `spacing` controls morph distance. It is also what makes a *single* surface's size change read as the shape flowing rather than a redraw.
+
+`GlassEffectTransition` has exactly `.matchedGeometry`, `.materialize`, `.identity`.
 
 ### 6.3 Morphing and unions
 
@@ -120,7 +135,7 @@ Multiple glass views require a `GlassEffectContainer(spacing:)`; it optimizes re
 
 ### 6.4 Button styles
 
-Prefer `.buttonStyle(.glass)` or `.glassProminent` over custom glass buttons. Also available: `glass(_:)`, `glass()`, `prominentGlass()`, `clearGlass()`, `prominentClearGlass()`.
+Three exist and no more: `.glass`, `.glass(_ glass: Glass)`, `.glassProminent`. **`prominentGlass()`, `clearGlass()`, and `prominentClearGlass()` do not exist** — they were listed here until 2026-08-19 and no such symbols are in the SDK. For a clear or tinted button use `.buttonStyle(.glass(.clear))` / `.glass(.regular.tint(…))`.
 
 ### 6.5 Shapes and background extension
 
@@ -141,7 +156,16 @@ Set both `cornerRadius` and `cornerCurve = .continuous`.
 
 ### 6.7 What real glass provides
 
-Adaptive backdrop tint, specular edge, rim refraction, and the user's Clear/Tinted setting—none come from blur plus a fill.
+Adaptive backdrop tint, specular edge, and rim refraction — none come from blur plus a fill.
+
+**Glass flips its own appearance, and its content's, from the luminance of what is behind it — not from the system's light/dark setting.** Measured 2026-08-19: one `HUDView` with no `colorScheme` override, in a window whose `effectiveAppearance` was `NSAppearanceNameDarkAqua`, rendered light glass with black text over a light backdrop and dark glass with white text over a dark one, in the same frame. Three consequences:
+
+- **A glass surface has no light variant and no dark variant to choose between.** Rendering "the light version" and "the dark version" of one for review is drawing the same view twice against different backdrops.
+- `.primary` and the other semantic label colors resolve against the *glass*, not the window, so they stay legible with no branch of your own.
+- **An explicit `.environment(\.colorScheme, _)` overrides that and pins the content**, while the surface goes on tinting and refracting from the backdrop — verified 2026-08-19 against a backdrop × override matrix. **Sotto's HUD pins deliberately** (`HUDPanel`, `DECISIONS.md` 2026-08-19): left adaptive, the labels invert mid-dictation when the user scrolls something dark under a HUD that is already on screen. Pin at appearance, never re-pin during one showing. Anywhere else, do not add the branch.
+- It is why the Appearance tab stays cut (§12). There is no per-appearance asset for a settings control to pick.
+
+**Clear and Tinted are not system appearances.** There is no `NSAppearanceName` for either; `Glass` has `.regular`/`.clear` and `NSGlassEffectView` has the matching two-case `style`, both app-set, and `tint` is a `Color` the app supplies. The Default/Dark/Clear/Tinted quartet is the **icon and widget** appearance set, which the system generates from the Icon Composer document (§6.9) and which does not extend to in-app surfaces. A global `NSGlassDiffusionSetting` default does exist; a per-process override of it produced zero pixel change, which does not prove it is inert — the argument domain may simply not be where it is read. Do not build on it either way.
 
 ### 6.8 Windows and controls
 
@@ -267,7 +291,7 @@ Feature-owned slices design the surface and wording; slice 6 owns the file-trans
 
 ### 11.1 `Design.pdf`
 
-Locked 2026-08-11; values transcribed to token-sheet §6 on 2026-08-13. Decisions: overlay bar (slice 9, §6.1), waveform/HUD (slice 3, §6.2), icons (slice 1, §6.3), in-app chat (slice 10, §6.4), and mockup limitations (all slices, §6.6). Page 5 is the standing warning: percentages are starting tints, not recipes; mockups approximate corners, material, motion, backdrop, and content. Its screen ratios assume 1512 × 982, 24 pt menu bar, and 84 pt Dock—gap 2 is whether anchors are values or rules.
+**No longer locked as of 2026-08-18** — Anthony unlocked every §6 value; see `DECISIONS.md`. Drawn 2026-08-11, transcribed to token-sheet §6 on 2026-08-13, and now a starting point rather than a constraint. §1's resolution order and the tier-2 burden still apply, and every change still gets logged. Decisions: overlay bar (slice 9, §6.1), waveform/HUD (slice 3, §6.2), icons (slice 1, §6.3), in-app chat (slice 10, §6.4), and mockup limitations (all slices, §6.6). Page 5 is the standing warning: percentages are starting tints, not recipes; mockups approximate corners, material, motion, backdrop, and content. Its screen ratios assume 1512 × 982, 24 pt menu bar, and 84 pt Dock—gap 2 is whether anchors are values or rules.
 
 ### 11.2 Chat SVG
 
