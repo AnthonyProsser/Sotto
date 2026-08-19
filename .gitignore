@@ -47,3 +47,6 @@ recordings/
 *.env
 .env.local
 Secrets.plist
+
+# Coverage output from running the app from a shell
+*.profraw

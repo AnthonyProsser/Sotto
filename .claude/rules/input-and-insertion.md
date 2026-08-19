@@ -68,6 +68,18 @@ This is one of the four cross-slice threads; see `.claude/rules/slices.md`.
 
 ---
 
+## 5.1 Testing the tap — three traps, each of which looks like a code bug
+
+Learned by hitting all three on 2026-08-18, in slice 2. Every one of them produces a tap that appears broken while being correctly written, which is why they are here rather than in a commit message.
+
+**Post synthetic test events to `.cgSessionEventTap`, never `.cgAnnotatedSessionEventTap`.** The annotated location is *downstream* of the session tap: events posted there reach the frontmost app but are invisible to Sotto's own tap. A harness using it will show the app receiving nothing and every keystroke passing through, which reads as "the tap does nothing" — note that §1's rule to post to the annotated tap is about **delivering** Sotto's own Cmd+C/Cmd+V, and is the opposite case.
+
+**Launch with `open`, never by running the binary inside the bundle.** Running `.../Sotto.app/Contents/MacOS/Sotto` from a shell breaks TCC attribution, and the failure is silent in the worst way: `tapCreate` **succeeds** and the tap then receives no events. `open --env KEY=VAL` breaks it too; use `launchctl setenv` when a test needs a variable. Keep the posting process alive about a second after its last event — exiting immediately can drop it.
+
+**A tap that installs but sees nothing is a permissions problem until proven otherwise.** Check the grant before reading the state machine. Signing, the `tccutil` reset, and why Input Monitoring's pane stays empty are in the project memory rather than here, because they are facts about Anthony's machine rather than about Sotto.
+
+---
+
 ## 6. Open question that lands here
 
 **Focus changes mid-transcription** — open issue 3 in `.claude/rules/open-questions.md`. User dictates into a field, then clicks away before transcription finishes. Original target, or clipboard? Undecided; ask, do not pick.
