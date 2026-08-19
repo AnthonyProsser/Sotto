@@ -80,9 +80,21 @@ extension Token {
 /// `.controlAccentColor`. Reading that hex out of the mockup and writing it into
 /// tier 2 is exactly the mistake tier 2 exists to prevent.
 ///
-/// **Empty** — nothing accented is built yet.
 extension Token {
     enum Accent {}
+}
+
+extension Token.Accent {
+    /// `accent.primary` — **first consumer: the HUD waveform's bars, slice 3.**
+    ///
+    /// Tier 1. `.controlAccentColor` follows the user's accent, including the
+    /// wallpaper-derived "This Mac" setting, and it is what every system control
+    /// that means *this is live right now* already uses. The alternative
+    /// considered was `.labelColor`, which is what Control Center gives a glyph
+    /// at rest — rejected because a resting glyph and a running capture are not
+    /// the same claim, and the waveform is the only confirmation the user gets
+    /// that Sotto is hearing them.
+    static var primary: Color { Color(nsColor: .controlAccentColor) }
 }
 
 /// Materials. Real system materials only, never blur plus a flat fill: Liquid
@@ -91,9 +103,26 @@ extension Token {
 /// different materials arrive later — floating-panel glass for the overlay
 /// (slice 9), Control Center–style glass for the HUD (slice 3).
 ///
-/// **Empty** — neither surface exists yet.
 extension Token {
     enum Material {}
+}
+
+extension Token.Material {
+    /// `material.hud` — **first consumer: `HUDView`, slice 3.**
+    ///
+    /// Tier 1, and one of the two `Glass` cases rather than an authored value.
+    ///
+    /// **`.clear`, on Anthony's ruling (2026-08-19).** `.regular` shipped first,
+    /// on the argument that it is the default and `.clear` is documented for
+    /// surfaces over media that guarantees its own contrast. He overruled it on
+    /// the renders: `.clear` refracts visibly harder, and the refraction is what
+    /// makes the surface read as glass at 36 pt tall rather than as a grey pill.
+    /// Legibility is not at risk because the glass adapts to its backdrop —
+    /// measured, see `rules/design.md` §6.7.
+    ///
+    /// **Not `.interactive()`**: that adds the press-and-flex response, and the
+    /// HUD has no controls at all.
+    static var hud: Glass { .clear }
 }
 
 // MARK: - Tier 2 — Authored
@@ -120,6 +149,80 @@ extension Token {
 /// Anthony rule on it before it lands here.
 extension Token {
     enum Authored {}
+}
+
+extension Token.Authored {
+    /// `waveform.*` — **first consumer: `Waveform`, slice 3.** The first of the
+    /// three pre-approved tier-2 entries, and the one with the strongest case:
+    /// macOS ships no waveform. `NSLevelIndicator` is the closest system control
+    /// and fails on all three counts — it is a filled gauge rather than a set of
+    /// bars, it has no idle treatment other than empty, and it is a control, so
+    /// it draws a focus ring and a hit region for a surface that has neither.
+    ///
+    /// **Every number here is provisional.** `sotto-tokens.md` §6.2 is unlocked
+    /// (`DECISIONS.md`, 2026-08-18) and Anthony has not ruled on `peak`; §6.2's
+    /// 28 filled 78 % of the surface, and the reference he called calm fills
+    /// 42 %. `count` is already settled at eight, down from §6.2's twelve.
+    enum Waveform {
+        static let count = 8
+        static let barWidth: CGFloat = 3.5
+        static let barGap: CGFloat = 4.5
+        static let peak: CGFloat = 20
+        /// Resting height. Equal to the width, so an idle bar is a dot rather
+        /// than a gap — §6.2's resting band was 3.5–6.7 and drifting.
+        static let resting: CGFloat = 3.5
+    }
+}
+
+extension Token.Authored {
+    /// `specular.*` — **first consumer: `HUDView`'s rim, slice 3.** The fourth
+    /// tier-2 entry and the first not pre-approved by §9. Anthony asked for it by
+    /// name against a Control Center reference (2026-08-19).
+    ///
+    /// **Rejected system value: there is none.** `Glass` has exactly five members
+    /// — `.regular`, `.clear`, `.identity`, `.tint(_:)`, `.interactive(_:)` — and
+    /// none is a knob on the specular pass; `grep -i specular` across the
+    /// installed SDK returns OpenGL, RealityKit, and SpriteKit, nothing in
+    /// SwiftUI or AppKit. Real glass draws its own specular edge, but measured on
+    /// screen at 36 pt it is not carrying the surface, which is what produced
+    /// this row. The nearest semantic value, `.separatorColor`, fails on kind
+    /// rather than strength: a separator is one flat colour the whole way round,
+    /// and this is a lit bevel.
+    ///
+    /// **Bright at top-left and bottom-right, dark at top-right and bottom-left**
+    /// (Anthony, from the reference). One light source above and to the left; the
+    /// rim is brightest where the surface turns to face it, which happens twice
+    /// on opposite sides because the far edge catches it again. Hence a period of
+    /// 180° rather than one revolution.
+    ///
+    /// **Not a symmetric white-to-black pair**, which would read as piping. The
+    /// dark lobes are weak so the shadow side reads as *unlit* rather than drawn.
+    enum Specular {
+        /// Hairline. `strokeBorder` insets by half of this and draws inward, so
+        /// the rim sits on the glass instead of straddling its edge.
+        static let width: CGFloat = 1
+
+        static let highlight = Color.white.opacity(0.5)
+        static let shadow = Color.black.opacity(0.12)
+
+        /// SwiftUI's angular gradient starts at 3 o'clock and runs clockwise in a
+        /// y-down space: 45° bottom-right, 135° bottom-left, 225° top-left,
+        /// 315° top-right. Locations are those angles over 360.
+        static var rim: AngularGradient {
+            let mid = Color.white.opacity(0.08)
+            return AngularGradient(
+                stops: [
+                    .init(color: mid, location: 0),
+                    .init(color: highlight, location: 0.125),   //  45° bottom-right
+                    .init(color: shadow, location: 0.375),      // 135° bottom-left
+                    .init(color: highlight, location: 0.625),   // 225° top-left
+                    .init(color: shadow, location: 0.875),      // 315° top-right
+                    .init(color: mid, location: 1),
+                ],
+                center: .center
+            )
+        }
+    }
 }
 
 // MARK: - Geometry

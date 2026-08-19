@@ -22,6 +22,8 @@ The SVG's turn anatomy — speaker labels, quoted selection, no assistant bubble
 
 **Two cases that decomposition does not cover:** a Dock positioned left or right, where there is no bottom occlusion at all, and an auto-hidden Dock, where occlusion is zero until it is not.
 
+**The HUD's half is now closed in form — 2026-08-18, see `DECISIONS.md`:** a constant distance from the top of `NSScreen.frame`, not a percentage and not menu-bar-relative, because removing the menu bar would otherwise slide the HUD up against the screen edge. Only the number is still open. The reasoning below is kept because it is what produced that answer.
+
 The HUD's **8 %** top position does not decompose — it came from an assumed 1512 × 982 screen with a 24 pt menu bar, and a notched MacBook Pro menu bar is taller than 24 pt. **Decide per anchor whether it is a fixed value or a rule, and record which.**
 
 ### Gap 3 — the send button's volume contradicts §14.3

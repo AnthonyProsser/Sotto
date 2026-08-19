@@ -22,6 +22,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ aNotification: Notification) {
         StatusItemController.shared.install()
         EventTap.shared.install()
+
+        // Temporary: show HUD for design testing (2026-08-19)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            HUDPanel.shared.show(.recording(level: 0.6))
+        }
     }
 
     /// Sotto lives in the menu bar; closing the main window is not quitting. Quit is

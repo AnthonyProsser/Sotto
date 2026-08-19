@@ -43,7 +43,8 @@ Do not build past one of these without asking — `.claude/rules/open-questions.
 | Slice | Question |
 |---|---|
 | **9** | Send button volume (gap 3); bare compose bar growth (issue 5); the chat's shape if it lands here (gap 1) |
-| **9 / 10** | The overlay and HUD anchor numbers — value or rule (gap 2) |
+| **3** | The **HUD's** anchor — the 8 % top offset, value or rule (gap 2). Slice 3 builds the HUD panel, so it has to be positioned here |
+| **9** | The **overlay's** anchor — the 118 pt bottom offset, value or rule (gap 2) |
 | **10** | Decision 04's shape, three-way (gap 1) |
 | **11** | Cleanup reasoning toggle and default (issue 4) |
 | **12** | MCP Swift SDK vs. protocol version (issue 1) — **decide before the first line** |

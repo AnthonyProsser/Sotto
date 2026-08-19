@@ -71,6 +71,29 @@ final class EventTap {
         thread.start()
     }
 
+    /// What each gesture signal does, and the whole of slice 3's wiring so far.
+    ///
+    /// **The waveform is not hearing anything yet.** Capture, VAD, and chunking
+    /// land later in this slice; until they do, `recording` carries a constant
+    /// level so the surface can be looked at, and that constant is the seam the
+    /// real level meter attaches to. Nothing here claims a transcription
+    /// happened, which is why `stop` takes the HUD away rather than morphing it
+    /// into "Copied to clipboard" — that message arrives with the thing that
+    /// makes it true.
+    @MainActor
+    private static func route(_ signal: GestureSignal) {
+        switch signal {
+        case .pushToTalk, .latched:
+            Activity.shared.set(.recording, true)
+            HUDPanel.shared.show(.recording(level: 1))
+        case .stop, .abort:
+            Activity.shared.set(.recording, false)
+            HUDPanel.shared.hide()
+        case .overlay:
+            break // Slice 9.
+        }
+    }
+
     // MARK: - The thread
 
     private func run() {
@@ -86,6 +109,10 @@ final class EventTap {
         }
         recognizer.emit = { [log] signal in
             log.notice("\(signal.rawValue, privacy: .public)")
+            // The state machine runs on the tap thread (§2.5); everything it
+            // drives is main-actor. Hopping here rather than inside `HUDPanel`
+            // keeps the thread boundary at the one place it is crossed.
+            DispatchQueue.main.async { Self.route(signal) }
         }
 
         let mask = (1 << CGEventType.keyDown.rawValue)
