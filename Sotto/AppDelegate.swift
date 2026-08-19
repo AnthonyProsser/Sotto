@@ -21,6 +21,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ aNotification: Notification) {
         StatusItemController.shared.install()
+        EventTap.shared.install()
     }
 
     /// Sotto lives in the menu bar; closing the main window is not quitting. Quit is
