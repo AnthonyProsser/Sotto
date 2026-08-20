@@ -18,12 +18,17 @@ import AppKit
 /// control that cannot act takes the system disabled state with the reason in the
 /// tooltip, and hiding them would lose the shape of the menu §10.1 specifies.
 @MainActor
-final class StatusItemController {
+final class StatusItemController: NSObject, NSMenuDelegate {
     static let shared = StatusItemController()
 
     private let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
 
-    private init() {}
+    /// `NSObject` and `NSMenuDelegate` for one reason: the Microphone submenu is
+    /// rebuilt on open, because the device list changes when a headset is plugged
+    /// in and a menu built at launch would be stale by the time it is used.
+    private let microphones = NSMenu()
+
+    private override init() {}
 
     func install() {
         item.menu = buildMenu()
@@ -56,7 +61,7 @@ final class StatusItemController {
         // §10.1 labels intact.
         menu.addItem(stub("Profile", "Profiles arrive in a later build."))
         menu.addItem(stub("Chat Model", "Chat models arrive in a later build."))
-        menu.addItem(stub("Microphone", "Input device selection arrives in a later build."))
+        menu.addItem(microphoneItem())
         menu.addItem(stub("MCPs", "MCP servers arrive in a later build."))
 
         menu.addItem(.separator())
@@ -68,6 +73,49 @@ final class StatusItemController {
         )
 
         return menu
+    }
+
+    // MARK: - Microphone (§4.8)
+
+    /// **The device is Sotto's, not the system's.** §4.8 puts it in the menu bar
+    /// rather than in Settings because it changes with headset use rather than
+    /// with task, and the menu bar is where the user already is when it changes.
+    ///
+    /// A selection made mid-recording is held and applied at the next one:
+    /// `AudioCapture` pins the device for the length of a gesture, which is the
+    /// same rule that stops the system default moving underneath an in-flight
+    /// dictation.
+    private func microphoneItem() -> NSMenuItem {
+        let item = NSMenuItem(title: "Microphone", action: nil, keyEquivalent: "")
+        microphones.delegate = self
+        item.submenu = microphones
+        return item
+    }
+
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        guard menu === microphones else { return }
+        menu.removeAllItems()
+
+        let selected = AudioCapture.shared.selectedDevice
+        let systemDefault = NSMenuItem(
+            title: "System Default",
+            action: #selector(AppDelegate.selectMicrophone(_:)),
+            keyEquivalent: ""
+        )
+        systemDefault.state = selected == nil ? .on : .off
+        menu.addItem(systemDefault)
+        menu.addItem(.separator())
+
+        for device in AudioCapture.inputDevices() {
+            let item = NSMenuItem(
+                title: device.name,
+                action: #selector(AppDelegate.selectMicrophone(_:)),
+                keyEquivalent: ""
+            )
+            item.representedObject = device.id
+            item.state = device.id == selected?.id ? .on : .off
+            menu.addItem(item)
+        }
     }
 
     /// Quit doubles as the shutdown path (§10.5) — event taps are per-process and

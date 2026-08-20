@@ -82,6 +82,15 @@ final class HUDPanel {
         return match == .darkAqua ? .dark : .light
     }
 
+    /// Level updates, which arrive about twelve times a second while capture is
+    /// running. Separate from `show` because they must not re-pin the appearance,
+    /// must not cancel a pending dismissal, and must not disturb a message or
+    /// error morph that has already replaced the waveform.
+    func level(_ level: Double) {
+        guard case .recording = state, panel?.isVisible == true else { return }
+        state = .recording(level: level)
+    }
+
     /// Show a terminal message and take the HUD away on its own. The two
     /// completion messages and the error morph all end this way — the HUD has no
     /// dismiss control because nothing in it is worth keeping on screen.

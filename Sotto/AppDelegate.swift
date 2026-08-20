@@ -6,6 +6,7 @@
 //
 
 import Cocoa
+import CoreAudio
 
 /// One of AppKit's three jobs in Sotto — the other two are the status item and the
 /// `NSWindow`/`NSPanel` objects hosting SwiftUI. Every view is SwiftUI
@@ -22,11 +23,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ aNotification: Notification) {
         StatusItemController.shared.install()
         EventTap.shared.install()
-
-        // Temporary: show HUD for design testing (2026-08-19)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            HUDPanel.shared.show(.recording(level: 0.6))
-        }
+        // Resolves the locale, claims it with `AssetInventory.reserve`, and caches
+        // the analyzer's audio format — all of it before the first gesture, so
+        // that starting a recording costs no `await`.
+        Dictation.shared.prepare()
     }
 
     /// Sotto lives in the menu bar; closing the main window is not quitting. Quit is
@@ -40,6 +40,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     // MARK: - Actions
+
+    /// The Microphone submenu (§4.8). `representedObject` is `nil` for the system
+    /// default, which is also the stored default — a specific device is only
+    /// remembered once the user has asked for one.
+    @IBAction func selectMicrophone(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? AudioDeviceID else {
+            AudioCapture.shared.selectedDevice = nil
+            return
+        }
+        AudioCapture.shared.selectedDevice = AudioCapture.inputDevices().first { $0.id == id }
+    }
 
     /// `Cmd+,` from the app menu, and **Settings…** in the menu bar menu. Settings
     /// is a page inside the main window rather than a window of its own, so this
