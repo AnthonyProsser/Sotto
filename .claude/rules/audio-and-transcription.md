@@ -6,27 +6,75 @@ Each rule below has a reason attached. The reason is load-bearing: a rule withou
 
 ---
 
-## 1. Chunking
+## 1. Chunking — and why most of this no longer applies
 
-**`maxChunk` = 240,000 samples ≈ 15 s at 16 kHz (§4.2).** Staying under it is a **requirement**, not a target. It is FluidAudio's internal `ChunkProcessor` threshold: cross it and seam handling is handed to FluidAudio, which is exactly what this design refuses. Measured word loss at FluidAudio seams is ~0.17 % — one span in 589 words, ~15 spans per hour. Sotto's overlap-and-reconcile design (§10.3) exists to catch that class of drop, and deferring to the library forfeits it. This is also why the old 30 s whole-buffer rule is gone. `chunkFloor` is 8 s, tunable, always < 15 s.
+**Read §1.0 before §1.1. The rules below it describe the Parakeet/FluidAudio path, which does not ship in v1 at all** — §1.1 is kept as history for a second backend that is not currently being built.
 
-**A recording that ends under 15 s is always transcribed whole (§4.2).** Any pause found between `chunkFloor` and 15 s starts speculative work that gets discarded if the utterance turns out short. That waste is deliberate — the alternative is waiting 15 s before starting any transcription on long dictation, which is the case that actually needs the head start.
+### 1.0 STT is Apple's Speech framework, exclusively (2026-08-19, `DECISIONS.md`)
 
----
+**This is the whole of v1's STT. Parakeet, FluidAudio, Silero, and Whisper do not ship in any form.** A non-Apple backend stays possible in a later version behind §2.2's "audio in, timestamped text out" interface, but nothing in v1 is built to receive one — do not add a second engine, a backend-selection setting, or a chunking stage on its behalf.
+
+`SpeechAnalyzer` + `SpeechTranscriber`. **Sotto does not chunk audio for this backend** — the analyzer segments and streams by itself. Measured on the reference machine: 545.6 s of audio in 7.89 s (**69× realtime**), **110 finalized results emitted progressively**, first one at **0.507 s**, **95 MB resident and flat**, per-word timings at ~60 ms with start and end, native punctuation and capitalisation.
+
+**The models are already on the machine and `reserve()` is the gate, not a download.** ~1.0 GB of system ASR assets ship with macOS for its own dictation. `AssetInventory.status(forModules:)` returning `.supported` means **"not claimed by this app,"** not "not present" — one `AssetInventory.reserve(locale:)` flips it to `.installed` with no network access. Reservation is **per-process**, so Sotto reserves at startup; the cap is `maximumReservedLocales` (5), and `release(reservedLocale:)` frees a slot.
+
+**Two API traps, both verified against the installed SDK:**
+
+- **`installedLocales` is not a safe gate.** It reported `en_US` installed on a machine where `status(forModules:)` said `.supported` for that same locale. Gating on it and calling `downloadAndInstall()` downloads a model the machine already has.
+- **`SpeechTranscriber.Preset.offlineTranscription` does not exist.** The five real presets are `.transcription`, `.transcriptionWithAlternatives`, `.timeIndexedTranscriptionWithAlternatives`, `.progressiveTranscription`, `.timeIndexedProgressiveTranscription`. `analyzeSequence(from: AVAudioFile)` *does* exist and is the file convenience.
+
+**`SpeechDetector` is preinstalled**, which is what retires Silero. `SpeechTranscriber` supports 30 locales, 17 installed out of the box (`en_*`, `es_*`, `fr_*`); the other 13 are real downloads. **`DictationTranscriber` covers 54** and is the fallback past those 30 — see §5, which is where coverage and behaviour live.
+
+**Both STT and the LLM run on the ANE. Neither touches the GPU** (measured 2026-08-19, `DECISIONS.md`). STT powers the ANE for 96.2 % of its window; Foundation Models holds it at 100 %; the GPU stays at idle baseline for both. **That inverts §2.2's reason for choosing Parakeet** — the ANE was chosen precisely because it does not contend with an LLM on the GPU, and under the all-Apple stack both are on the ANE instead.
+
+**What follows from it is a rate rule, not a ban:**
+
+- **Microphone-rate dictation may overlap Foundation Models freely.** STT at 1× realtime costs cleanup +5 % latency, inside run-to-run drift. Dictation and cleanup are sequential anyway.
+- **File and import transcription is serialised around active chat generation.** At 60× realtime it costs cleanup **+76 %** and loses **24 %** of its own throughput. Slice 14 does not run an import against a generating chat response; it waits.
+
+Bounds: one machine, no `sudo`, so this is ANE occupancy and latency rather than per-block power. ANE power-down has hysteresis, so a "powered" reading overhangs the work that caused it — use the client-count delta if you re-measure.
+
+### 1.1 The Parakeet path — history only, not a v1 backend
+
+**`maxChunk` = 240,000 samples ≈ 15 s at 16 kHz (§4.2).** It is not a chosen number — it is FluidAudio's internal `ChunkProcessor` threshold, and the overlap-and-reconcile design exists to stay under it. **With FluidAudio gone, so is the threshold**; chunking is now a per-backend detail *below* §2.2's "audio in, timestamped text out" interface, not a pipeline stage. Whisper's hard 30 s receptive field would still force chunking, but that is the *model's* constraint and belongs in a Whisper backend.
+
+**If Parakeet ever returns it needs CoreML, not FluidAudio and not MLX.** MLX has no ANE backend, so it puts STT on the GPU against the LLM; FluidInference built `swift-parakeet-mlx` and abandoned it on performance. FluidAudio is one CoreML packaging among several.
+
+**A recording that ends under 15 s is always transcribed whole (§4.2)** — Parakeet path only.
 
 ## 2. Timings and seeking
 
-**Word timings: `startTime` only (§9.3).** `endTime` is never read. This sidesteps the FluidAudio #381 bug class and is independently validated by the measurement: word starts hit a floor (all error early, bounded at about −320 ms, 100 % within ±500 ms), while sentence *ends* smear to +1075 ms at long pauses. Parse `buildWordTimings(from:)` and store; do not build an aligner.
+**On the Apple path, timings come from the `.audioTimeRange` attribute on the result's `AttributedString` runs** — per word, ~60 ms, start and end. `buildWordTimings(from:)` was FluidAudio's and is gone with it. **The `startTime`-only rule survives on its pre-roll argument** (below); the FluidAudio #381 reason for it does not apply here.
 
-**Click-to-seek ships at zero offset (§9.3).** `TDT_EMISSION_DELAY_FRAMES=0` would shift timestamps ~80 ms later for free and is **deliberately unused** — that knob corrects emission delay against CTC peaks, and repurposing it conflates two concerns that will diverge. Early is pre-roll, not error: landing half a second before the clicked word gives the beat of lead-in an audio editor adds on purpose. Keep a config hook; ship at zero.
+**Word timings: `startTime` only (§9.3).** `endTime` is never read. This sidesteps the FluidAudio #381 bug class and is independently validated by the measurement: word starts hit a floor (all error early, bounded at about −320 ms, 100 % within ±500 ms), while sentence *ends* smear to +1075 ms at long pauses. Read the `.audioTimeRange` run attribute and store the start; do not build an aligner.
+
+**Click-to-seek ships at zero offset (§9.3).** Early is pre-roll, not error: landing half a second before the clicked word gives the beat of lead-in an audio editor adds on purpose. Keep a config hook; ship at zero. The original form of this rule rejected Parakeet's `TDT_EMISSION_DELAY_FRAMES` as a way to buy ~80 ms of shift — that knob went with the Parakeet path, but the reasoning that rejected it stands on its own and is why the hook is not wired to anything on the Apple path either.
 
 ---
 
 ## 3. The HUD's entire vocabulary
 
-**A waveform, two completion messages, and an error morph. That is all of it.** The waveform is mandatory and has no toggle. Audio-side failures surface here — transcription failure, audio or cleanup model load failure, cleanup failing mid-pass, an AX write rejected (§4.5). See `.claude/rules/design.md` §10 for the full routing table.
+**A waveform, two completion messages, and an error morph. That is all of it.** The waveform is mandatory and has no toggle. Audio-side failures surface here — transcription failure, audio model load failure, cleanup failing **mid-pass**, an AX write rejected (§4.5). See `.claude/rules/design.md` §10 for the full routing table.
+
+**One case that looks like it belongs here and does not: the cleanup model being unavailable.** `SystemLanguageModel.availability != .available` is a configuration state, knowable before the gesture fires, and it routes to Settings → Dictation with a banner instead (2026-08-19, `DECISIONS.md`). **Slice 3 designs the error morph with no model-unavailable string in it.** The HUD says something went wrong with work the user just started; it does not report what the machine was never set up to do.
 
 The HUD reports through the idle / not-idle signal, one of the four cross-slice threads — see `.claude/rules/slices.md`.
+
+---
+
+## 3.1 Cleanup's default model, and warming it
+
+**Cleanup defaults to Apple's on-device model** — `SystemLanguageModel`, `FoundationModels` — so Sotto punctuates dictation at first run with nothing downloaded (2026-08-19, `DECISIONS.md`). It stays per-profile per §4.6; this is a default, not a lock. Use `Guardrails.permissiveContentTransformations`, **not** the default set: the default guardrails refuse on the user's own dictated content, and an app that declines to punctuate what someone just said because it contained profanity or a medical term is not a dictation app.
+
+**Prewarm when the gesture arms, not when cleanup starts.** Measured on the reference machine: the first request after launch costs ~3.5 s, every request after it ~850 ms. Un-prewarmed, the first dictation of each session pays that 3.5 s in the gap between speaking and seeing text. `LanguageModelSession.prewarm(promptPrefix:)` is the hook, and **slice 3 leaves the seam even though slice 11 fills it** — the gesture is slice 2/3 and cleanup is slice 11, so without it slice 11 reaches back into gesture handling.
+
+**Prewarming is never `Activity.Contributor.cleanup`.** The icon reports that Sotto is awake (§14.8); a speculative warm-up the user did not ask for is not that. Set the contributor when a pass actually runs.
+
+**Cleanup owns its own `LanguageModelSession` and never shares chat's.** Reusing one session for two simultaneous requests throws `concurrentRequests` deterministically; two distinct sessions both complete (2026-08-19, `DECISIONS.md`). **There is no parallel speedup** — the model serialises underneath — so a cleanup pass firing while a chat response generates costs roughly a full request on whichever the user is waiting for. Full numbers in `rules/models-and-network.md` §1.1.
+
+**4096 is the whole window, prompt and output.** Confirmed at runtime, not just in the interface. Dictation is unaffected — §4.6 measures a five-minute latched session at ~1,000 tokens — but §4.6's chunked-cleanup formula for long imports computes against a much smaller number than an MLX model would give, so imports get materially more boundaries and each one is a chance to split a self-correction.
+
+**Known instruction gap, found in testing:** the model punctuates from pause markers well (240 ms → comma, 780 ms and 1120 ms → sentence breaks, verified), removes fillers, and fixes stutters — but it *preserves* self-corrections rather than resolving them, keeping "no wait, actually" instead of dropping the abandoned first choice as §4.6 asks. That is prompt wording, not a model limit. Fix it in slice 11's instructions rather than rediscovering it as a complaint.
 
 ---
 
@@ -41,17 +89,51 @@ The HUD reports through the idle / not-idle signal, one of the four cross-slice 
 
 ---
 
-## 5. Stack, for reference
+## 5. The two Apple transcribers — coverage and behaviour
+
+**`SpeechTranscriber` is the engine. `DictationTranscriber` is the fallback past its locale list.** Both run under `SpeechAnalyzer`, both are on-device, and both install via `AssetInventory` into system storage outside the app sandbox — no app-size cost, no weights, no KV geometry, nothing for §2.3's memory estimate to compute. Same shape as the Foundation Models entry in `rules/models-and-network.md` §1.1.
+
+```swift
+let transcriber = SpeechTranscriber(locale:, transcriptionOptions:, reportingOptions:, attributeOptions:)
+let analyzer = SpeechAnalyzer(modules: [transcriber])
+try await analyzer.start(inputSequence:)
+// ...
+try await analyzer.finalizeAndFinishThroughEndOfInput()
+```
+
+| | `SpeechTranscriber` | `DictationTranscriber` |
+|---|---|---|
+| Locales | **30** supported, 17 installed out of the box | **54** supported |
+| Word timings | `.audioTimeRange`, ~60 ms, start and end | `.audioTimeRange` with `.timeIndexedLongDictation` — **verified, 23 of 23 runs timed** |
+| Punctuation and capitalisation | **Native** | **None** |
+
+**The 54 is why no non-Apple backend ships in v1 (2026-08-19, `DECISIONS.md`).** Apple's own fallback nearly doubles the locale list — Russian, Dutch, Hindi, Arabic, Polish, Thai, Vietnamese, Ukrainian among them — and every locale probed where `SpeechTranscriber` returned `.unsupported` came back `.supported` there. Whisper's remaining advantage is the ~99-locale tail, which does not buy a second engine and a chunking stage.
+
+**Where `DictationTranscriber` runs, cleanup supplies the punctuation and the capitalisation.** On the same clip `SpeechTranscriber` returns *"So the thing is, I think we should ship the smaller model first."* and `DictationTranscriber` returns the same words with neither. That is not a gap Sotto has to close — §3.1's cleanup pass is already running and already punctuates from pause markers. **It does mean the fallback path is harder-dependent on cleanup than the primary one**, so a profile that turns cleanup off gets unpunctuated text on those locales. Say so in the setting rather than discovering it as a bug report.
+
+**Accuracy, stated as the floor it is:** WER **1.71 %** on the reference clip — 26 errors in 1518 words, of which 18 are `and`→`end` and 7 are `first`→`1st`. **That was `say`-synthesised audio with no noise, accent, or disfluency, so it is a floor and not a real-microphone figure**, and it is explicitly not a Whisper comparison. **Apple normalises ordinals to digits**, which is what the `1st` count really measures; slice 11's cleanup instructions are writing against text that already carries house formatting.
+
+**Two things Apple's own sample code recommends that Sotto has cut, and they stay cut (§4):**
+
+- `.volatileResults` — the intermediate live guess. This is §4's **live transcript layer** and **live-streaming insertion**. Only the `isFinal` path is in scope.
+- Highlighting `audioTimeRange` runs during playback. This is §4's **sentence-following playback highlight**. Click-to-seek (§2) is the only playback-time use of timing data that survived.
+
+**Platform coverage:** iOS/iPadOS/macOS/tvOS/visionOS, not watchOS — moot; Sotto is macOS-only (`CLAUDE.md` §2).
+
+---
+
+## 6. Stack, for reference
 
 | | |
 |---|---|
-| STT | Parakeet TDT v3 on the ANE (does not contend with the LLM on GPU); Whisper large-v3-turbo alternate |
-| VAD | Silero, 32 ms frames |
+| STT | **Apple `SpeechAnalyzer` / `SpeechTranscriber`, exclusively** (2026-08-19). `DictationTranscriber` past its 30 locales. **No non-Apple backend ships in v1** — Parakeet TDT v3, FluidAudio, and Whisper are all out |
+| VAD | **`SpeechDetector`**, preinstalled. Silero retired with the Parakeet path |
+| Compute | **ANE, shared with Foundation Models.** Mic-rate STT may overlap the LLM; import-rate STT is serialised around chat generation (§1.0) |
 | Storage | Audio as Opus @ 24 kbps (~0.18 MB/min vs WAV's ~1.9) |
 | Retention | Audio: ring of 8 by default, configurable, with a pin flag. Imports auto-pinned |
 
 ---
 
-## 6. Open question that lands here
+## 7. Open question that lands here
 
 **Cleanup reasoning: toggle, and default** — open issue 4 in `.claude/rules/open-questions.md`. Lands in slice 11. Undecided; ask, do not pick.

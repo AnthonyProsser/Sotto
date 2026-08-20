@@ -194,9 +194,9 @@ Also gone: the Out-of-scope section, insert-mode in profiles, and the zero-outbo
 | | |
 |---|---|
 | Gestures | Hold or double-tap **Right Cmd** → dictate (routes to chat if text is selected). Double-tap **Option** → overlay |
-| STT | Parakeet TDT v3 on the ANE (does not contend with the LLM on GPU); Whisper large-v3-turbo alternate |
-| LLM | `mlx-swift` embedded; OpenAI-compatible adapter for Ollama `:11434`, `llama-server`, LM Studio |
-| VAD | Silero, 32 ms frames |
+| STT | Apple `SpeechAnalyzer` / `SpeechTranscriber`, **the only v1 backend**; `DictationTranscriber` past its 30 locales. Runs on the ANE, **shared with the LLM** |
+| LLM | Apple `SystemLanguageModel` by default; `mlx-swift` embedded; OpenAI-compatible adapter for Ollama `:11434`, `llama-server`, LM Studio |
+| VAD | `SpeechDetector`, preinstalled |
 | Reference machine | MacBook Neo, 8 GB unified memory — the development target, not a runtime floor |
 | Memory estimate | `weights + KV + ~15 % overhead`; amber past ~60 % of physical RAM; always advisory |
 | Permissions | Accessibility, Input Monitoring, Microphone at first run; **Screen Recording deferred to the first screenshot**. No Notifications, ever |

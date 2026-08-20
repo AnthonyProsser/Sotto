@@ -273,10 +273,13 @@ No global error token, central error vocabulary, notification, or modal. Errors 
 
 | Failure | Surface |
 |---|---|
-| Transcription, audio/cleanup model load, cleanup, AX write | HUD (§4.5) |
+| Transcription, audio model load, cleanup failing **mid-pass**, AX write | HUD (§4.5) |
+| Cleanup or chat model **unavailable** — `SystemLanguageModel.availability != .available` | Settings, the pane that owns it: Dictation for cleanup, Chat for chat. Model picker with a banner naming the reason |
 | Chat model load, generation, tool call | Chat: overlay or main window |
 | File transcription | Main window, Audio pane |
 | Model download | Originating model list (§7.4) |
+
+**Unavailable is not a failure, and that is why it moved** (2026-08-19, `DECISIONS.md`). A model that fails mid-pass is a runtime event inside work the user just started, so it belongs on the surface that started it. Apple's on-device model cannot fail to load — it is enabled on the machine or it is not, the state is knowable before the gesture fires, and the remedy is in System Settings. A HUD morph repeating "cleanup unavailable" on every single dictation is a notification in all but name, which `CLAUDE.md` §2 rules out. **Slice 3 therefore designs the error morph with no model-unavailable string in it.**
 
 Feature-owned slices design the surface and wording; slice 6 owns the file-transcription slot despite failure production arriving in slice 14.
 

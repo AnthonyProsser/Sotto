@@ -16,21 +16,23 @@ Ordering rule throughout: nothing depends on something built later, and every sl
 
 ---
 
-## 2. Slice 1 — Shell, the one that is next
+## 2. Slice 1 — Shell
 
 Builds: `.accessory` at launch, the §10.1 `NSMenu` with stubbed submenus, the settings window on `Cmd+,`, the activation-policy flip **with the overlay guard**, both menu bar icon states, the idle/not-idle observable, and the token layer as a thin mapping — **no theme struct**, but the indirection must exist so the inherited-vs-authored boundary stays auditable in one file.
 
 ---
 
-## 3. The four threads that cross slices
+## 3. The five threads that cross slices
 
-Four things are built in pieces and go wrong if each slice treats them as local.
+Five things are built in pieces and go wrong if each slice treats them as local.
 
 **The idle / not-idle signal (§14.8).** Defined in **slice 1**; fed by slices **3, 7, 9, 10, 11, 14**. Not idle covers: recording (either gesture, including latched), overlay open, main window open, a response generating, a file transcription running, cleanup running, a model loading. Define it once as a single observable with a documented contributor list, or seven later slices each quietly add a second source of truth. The icon reports that Sotto is **awake**, not that Sotto is recording — macOS 26 already draws its own mic indicator in the same menu bar, and duplicating it would be Sotto asserting something the system asserts better.
 
 **The Escape priority stack (§10.4).** Exactly one action fires: abort in-flight gesture (slice **2**) → cancel transcription (slice **3**) → stop chat generation (slice **9**) → close overlay (slice **9**). Slice **13**'s scrim preempts all four. Full rule in `.claude/rules/input-and-insertion.md` §3.
 
 **Error routing (§14.3).** No central error type, no central vocabulary. Each failure names its own surface at the point it is thrown. Surfaces are designed in the slice that owns them — slice **6** designs the file-transcription failure slot even though nothing produces one until slice **14**. Full table in `.claude/rules/design.md` §10.
+
+**The cleanup model's warm-up.** The hook is set in **slice 3**, fired from the gesture in **slice 2/3**, and consumed by **slice 11**. Apple's on-device model costs ~3.5 s on the first request after launch and ~850 ms after that (measured 2026-08-19), so an un-prewarmed cleanup puts 3.5 s into the gap between speaking and seeing text on the first dictation of every session. **Slice 3 leaves the seam even though nothing fills it yet** — otherwise slice 11 reaches back into gesture handling to add one. Prewarming is never an `Activity` contributor; full rule in `.claude/rules/audio-and-transcription.md` §3.1.
 
 **The token sheet's growth (§14.2).** One row at a time, each a four-part claim. Starts empty in slice **1** with whatever the menu and settings window actually consume. Three tier-2 entries are pre-approved — waveform idle bar (slice **3**), the scrim pair (slice **13**), overlay intrusiveness (slice **9**). Full rule in `.claude/rules/design.md` §9.
 
@@ -49,3 +51,32 @@ Do not build past one of these without asking — `.claude/rules/open-questions.
 | **11** | Cleanup reasoning toggle and default (issue 4) |
 | **12** | MCP Swift SDK vs. protocol version (issue 1) — **decide before the first line** |
 | Any | Focus change mid-transcription (issue 3). Issue 2 is closed — all SwiftUI |
+
+---
+
+## 5. Build-order amendments not yet folded back
+
+**`docs/sotto-build-order.md` is read-only (`CLAUDE.md` §0), so amendments live here until Anthony folds them in.** Each one is also a `DECISIONS.md` row; this section exists because §0.1 sends future sessions to the build order first, and the build order does not yet know about any of these. **When an entry has been folded back, delete it from here** — a duplicate that outlives its source is how two documents start disagreeing.
+
+### Slice 3 — Dictation core
+
+- **Design item 5, the error morph:** design it with **no model-unavailable string**. A cleanup model that is not available routes to Settings → Dictation, not to the HUD. See `rules/design.md` §10.
+- **Build list, one addition:** leave the **prewarm seam** for the cleanup model — fired when the gesture arms, filled in slice 11. §3's fifth cross-slice thread.
+
+### Slice 4 — Transcription pipeline
+
+- **Apple Speech is the only backend.** No Parakeet, FluidAudio, Silero, or Whisper, and **no backend-selection seam built on spec** — a second engine stays possible in a later version behind §2.2's interface, but v1 does not carry scaffolding for one. `rules/audio-and-transcription.md` §1.0.
+- **STT and the LLM share the ANE**, so the slice may not assume they are on different blocks. Mic-rate capture may overlap Foundation Models freely; that is measured, not assumed.
+
+### Slice 9 — Overlay and chat · Slice 14 — File transcription
+
+- **Import transcription is serialised around active chat generation.** At 60× realtime an import costs cleanup **+76 %** latency and loses **24 %** of its own throughput. Slice 14 waits on a generating response rather than competing with it; slice 9 owns the signal it waits on. Neither applies to microphone dictation, which overlaps freely.
+- **Cleanup and chat each own a `LanguageModelSession`.** Sharing one throws `concurrentRequests` deterministically, and concurrency buys no throughput — the model serialises. `rules/models-and-network.md` §1.1.
+
+### Slice 11 — Profiles, cleanup, and calibration
+
+- **Cleanup defaults to Apple's on-device model**, with `Guardrails.permissiveContentTransformations`. Still per-profile.
+- **Fix the self-correction instruction.** Measured: the model preserves "no wait, actually" instead of resolving to what the speaker settled on, which is what §4.6 asks for.
+- **Fill the prewarm seam** slice 3 left; never set `Activity.Contributor.cleanup` for a prewarm.
+
+Full reasoning for all of these is in `rules/audio-and-transcription.md` §3.1 and `rules/models-and-network.md` §1.1.
