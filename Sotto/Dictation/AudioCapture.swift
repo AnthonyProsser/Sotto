@@ -39,6 +39,12 @@ nonisolated final class AudioCapture: @unchecked Sendable {
     private var converter: AVAudioConverter?
     private var isRunning = false
 
+    /// Copies of the converted buffers, kept until `takeRecording()` or
+    /// `discardRecording()`. The tap's own buffer is reused by the engine, so
+    /// retaining it without a copy would alias later frames.
+    private var retained: [AVAudioPCMBuffer] = []
+    private var retainedFormat: AVAudioFormat?
+
     /// The meter's follower. Raw RMS at ~12 Hz makes the bars snap between
     /// syllables; an envelope that rises almost immediately and falls over a few
     /// buffers reads as a voice rather than as a strobe. Fast attack because a
@@ -223,6 +229,8 @@ nonisolated final class AudioCapture: @unchecked Sendable {
         }
 
         smoothed = 0
+        retained = []
+        retainedFormat = nil
         let (stream, continuation) = AsyncStream<AnalyzerInput>.makeStream()
         self.continuation = continuation
 
@@ -235,6 +243,8 @@ nonisolated final class AudioCapture: @unchecked Sendable {
             smoothed = level > smoothed ? level : smoothed * 0.6 + level * 0.4
             onLevel?(smoothed)
             guard let converted = convert(buffer) else { return }
+            if retainedFormat == nil { retainedFormat = converted.format }
+            if let copy = Self.copy(converted) { retained.append(copy) }
             continuation.yield(AnalyzerInput(buffer: converted))
         }
 
@@ -260,6 +270,21 @@ nonisolated final class AudioCapture: @unchecked Sendable {
         converter = nil
         continuation?.finish()
         continuation = nil
+    }
+
+    /// Move the retained PCM out. Slice 5 encodes it; abort discards it.
+    func takeRecording() -> (format: AVAudioFormat, buffers: [AVAudioPCMBuffer])? {
+        defer {
+            retained = []
+            retainedFormat = nil
+        }
+        guard let retainedFormat, !retained.isEmpty else { return nil }
+        return (retainedFormat, retained)
+    }
+
+    func discardRecording() {
+        retained = []
+        retainedFormat = nil
     }
 
     /// Write the device onto the input unit rather than leaving the engine on
@@ -305,6 +330,20 @@ nonisolated final class AudioCapture: @unchecked Sendable {
         guard status != .error, out.frameLength > 0 else {
             if let error { log.error("Conversion failed: \(error.localizedDescription, privacy: .public)") }
             return nil
+        }
+        return out
+    }
+
+    private static func copy(_ buffer: AVAudioPCMBuffer) -> AVAudioPCMBuffer? {
+        guard let out = AVAudioPCMBuffer(pcmFormat: buffer.format, frameCapacity: buffer.frameLength) else {
+            return nil
+        }
+        out.frameLength = buffer.frameLength
+        let srcList = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: buffer.audioBufferList))
+        let dstList = UnsafeMutableAudioBufferListPointer(out.mutableAudioBufferList)
+        for (src, dst) in zip(srcList, dstList) {
+            guard let srcBytes = src.mData, let dstBytes = dst.mData else { continue }
+            dstBytes.copyMemory(from: srcBytes, byteCount: Int(src.mDataByteSize))
         }
         return out
     }

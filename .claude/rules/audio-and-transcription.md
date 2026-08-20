@@ -24,7 +24,7 @@ Each rule below has a reason attached. The reason is load-bearing: a rule withou
 - **A transcriber module belongs to one `SpeechAnalyzer` for its lifetime.** Handing the same `SpeechTranscriber` to a second analyzer traps inside the framework and kills the process — `EXC_BREAKPOINT` at `TranscriberCommon.worker.setter`, from `prepareModulesIfNeeded()`, on the **second dictation of every launch** (2026-08-19). Build a fresh module per recording; keep the locale and the resolved format, not the module.
 - **`SpeechTranscriber.Preset.offlineTranscription` does not exist.** The five real presets are `.transcription`, `.transcriptionWithAlternatives`, `.timeIndexedTranscriptionWithAlternatives`, `.progressiveTranscription`, `.timeIndexedProgressiveTranscription`. `analyzeSequence(from: AVAudioFile)` *does* exist and is the file convenience.
 
-**`SpeechDetector` is preinstalled**, which is what retires Silero. `SpeechTranscriber` supports 30 locales, 17 installed out of the box (`en_*`, `es_*`, `fr_*`); the other 13 are real downloads. **`DictationTranscriber` covers 54** and is the fallback past those 30 — see §5, which is where coverage and behaviour live.
+**`SpeechDetector` is preinstalled**, which is what retires Silero. It is a second module on the same `SpeechAnalyzer` as the transcriber, built fresh per recording (same one-analyzer rule), with `reportResults: true`. Silence ranges ≥ 80 ms become pause markers on the draft and go into the history sidecar; they are also inlined in the raw transcript as `[pause Nms]` for cleanup (§4.6). `SpeechTranscriber` supports 30 locales, 17 installed out of the box (`en_*`, `es_*`, `fr_*`); the other 13 are real downloads. **`DictationTranscriber` covers 54** and is the fallback past those 30 — see §5, which is where coverage and behaviour live.
 
 **Both STT and the LLM run on the ANE. Neither touches the GPU** (measured 2026-08-19, `DECISIONS.md`). STT powers the ANE for 96.2 % of its window; Foundation Models holds it at 100 %; the GPU stays at idle baseline for both. **That inverts §2.2's reason for choosing Parakeet** — the ANE was chosen precisely because it does not contend with an LLM on the GPU, and under the all-Apple stack both are on the ANE instead.
 
@@ -77,6 +77,8 @@ The HUD reports through the idle / not-idle signal, one of the four cross-slice 
 
 **Known instruction gap, found in testing:** the model punctuates from pause markers well (240 ms → comma, 780 ms and 1120 ms → sentence breaks, verified), removes fillers, and fixes stutters — but it *preserves* self-corrections rather than resolving them, keeping "no wait, actually" instead of dropping the abandoned first choice as §4.6 asks. That is prompt wording, not a model limit. Fix it in slice 11's instructions rather than rediscovering it as a complaint.
 
+**Fill `AudioEntry.cleaned`, `.profile`, and `.languages` in this slice.** Slice 5 writes them empty so the sidecar shape is already honest. Cleanup produces `cleaned`; the active profile's name is `profile`. `languages` has no Apple equivalent of Whisper's per-segment language tokens — pick the source here, do not invent one in passing. The type lives in `Sotto/History/AudioHistory.swift`.
+
 ---
 
 ## 4. Cut, and staying cut
@@ -128,9 +130,9 @@ try await analyzer.finalizeAndFinishThroughEndOfInput()
 | | |
 |---|---|
 | STT | **Apple `SpeechAnalyzer` / `SpeechTranscriber`, exclusively** (2026-08-19). `DictationTranscriber` past its 30 locales. **No non-Apple backend ships in v1** — Parakeet TDT v3, FluidAudio, and Whisper are all out |
-| VAD | **`SpeechDetector`**, preinstalled. Silero retired with the Parakeet path |
+| VAD | **`SpeechDetector`**, preinstalled, wired in slice 5. Silero retired with the Parakeet path |
 | Compute | **ANE, shared with Foundation Models.** Mic-rate STT may overlap the LLM; import-rate STT is serialised around chat generation (§1.0) |
-| Storage | Audio as Opus @ 24 kbps (~0.18 MB/min vs WAV's ~1.9) |
+| Storage | Audio as Opus @ 24 kbps in CAF (`audio.caf` + `entry.json`). Obsidian is not a feature |
 | Retention | Audio: ring of 8 by default, configurable, with a pin flag. Imports auto-pinned |
 
 ---
