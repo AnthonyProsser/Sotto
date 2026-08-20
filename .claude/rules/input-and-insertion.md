@@ -30,6 +30,8 @@ Post to `.cgAnnotatedSessionEventTap`, **not** the HID tap — that is what deli
 
 **Two strategies, in order (§3): Accessibility, then clipboard paste.** AX writes to `AXValue`/`AXSelectedText` on the focused element — atomic and most robust. Paste is the fallback, second because save-and-restore of `NSPasteboard` is lossy: promised/lazy data cannot be captured, and anything that copies during the window clobbers the restore.
 
+**The AX write's return status is not evidence — measure it (2026-08-19).** Safari answers `kAXErrorSuccess` to an `AXSelectedText` write on a plain `<textarea>` reporting `AXTextArea`, and does nothing with it. Believing the status loses the transcript with no error anywhere, which is the one outcome §4.5 rules out. Read `AXNumberOfCharacters` before and after; unchanged means fall through to paste. Not `AXValue` — that copies the whole document across the AX boundary twice per dictation, and the document can be a book.
+
 **No focused field → clipboard and stop (§3).** Never paste into whatever happens to be frontmost. The HUD's waveform morphs into "Copied to clipboard" and fades — that confirmation is the entire reason this path is safe.
 
 **The CGEvent Unicode strategy is deleted — do not resurrect it.** It existed to serve the human-typing MCP, which is now a separate unrelated project. As an out-of-process MCP it cannot post keystrokes under Sotto's Accessibility grant anyway, so there was nothing left for the strategy to serve.
@@ -75,6 +77,8 @@ Learned by hitting all three on 2026-08-18, in slice 2. Every one of them produc
 **Post synthetic test events to `.cgSessionEventTap`, never `.cgAnnotatedSessionEventTap`.** The annotated location is *downstream* of the session tap: events posted there reach the frontmost app but are invisible to Sotto's own tap. A harness using it will show the app receiving nothing and every keystroke passing through, which reads as "the tap does nothing" — note that §1's rule to post to the annotated tap is about **delivering** Sotto's own Cmd+C/Cmd+V, and is the opposite case.
 
 **Launch with `open`, never by running the binary inside the bundle.** Running `.../Sotto.app/Contents/MacOS/Sotto` from a shell breaks TCC attribution, and the failure is silent in the worst way: `tapCreate` **succeeds** and the tap then receives no events. `open --env KEY=VAL` breaks it too; use `launchctl setenv` when a test needs a variable. Keep the posting process alive about a second after its last event — exiting immediately can drop it.
+
+**macOS's own dictation answers a held Right Command on the reference machine.** Found 2026-08-19: a hold produces text from the system as well as from Sotto, and the first symptom is text appearing *twice*, which reads as a duplicated insertion in Sotto's own pipeline. It is not — quit Sotto and the text still appears. Test with the double-tap latch, which the system does not claim. The product question this raises is Anthony's and is logged in `DECISIONS.md`.
 
 **A tap that installs but sees nothing is a permissions problem until proven otherwise.** Check the grant before reading the state machine. Signing, the `tccutil` reset, and why Input Monitoring's pane stays empty are in the project memory rather than here, because they are facts about Anthony's machine rather than about Sotto.
 

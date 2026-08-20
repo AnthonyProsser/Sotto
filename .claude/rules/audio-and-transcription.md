@@ -18,9 +18,10 @@ Each rule below has a reason attached. The reason is load-bearing: a rule withou
 
 **The models are already on the machine and `reserve()` is the gate, not a download.** ~1.0 GB of system ASR assets ship with macOS for its own dictation. `AssetInventory.status(forModules:)` returning `.supported` means **"not claimed by this app,"** not "not present" — one `AssetInventory.reserve(locale:)` flips it to `.installed` with no network access. Reservation is **per-process**, so Sotto reserves at startup; the cap is `maximumReservedLocales` (5), and `release(reservedLocale:)` frees a slot.
 
-**Two API traps, both verified against the installed SDK:**
+**Three API traps, all verified against the installed SDK:**
 
 - **`installedLocales` is not a safe gate.** It reported `en_US` installed on a machine where `status(forModules:)` said `.supported` for that same locale. Gating on it and calling `downloadAndInstall()` downloads a model the machine already has.
+- **A transcriber module belongs to one `SpeechAnalyzer` for its lifetime.** Handing the same `SpeechTranscriber` to a second analyzer traps inside the framework and kills the process — `EXC_BREAKPOINT` at `TranscriberCommon.worker.setter`, from `prepareModulesIfNeeded()`, on the **second dictation of every launch** (2026-08-19). Build a fresh module per recording; keep the locale and the resolved format, not the module.
 - **`SpeechTranscriber.Preset.offlineTranscription` does not exist.** The five real presets are `.transcription`, `.transcriptionWithAlternatives`, `.timeIndexedTranscriptionWithAlternatives`, `.progressiveTranscription`, `.timeIndexedProgressiveTranscription`. `analyzeSequence(from: AVAudioFile)` *does* exist and is the file convenience.
 
 **`SpeechDetector` is preinstalled**, which is what retires Silero. `SpeechTranscriber` supports 30 locales, 17 installed out of the box (`en_*`, `es_*`, `fr_*`); the other 13 are real downloads. **`DictationTranscriber` covers 54** and is the fallback past those 30 — see §5, which is where coverage and behaviour live.

@@ -32,6 +32,14 @@ final class EventTap {
     private let recognizer = GestureRecognizer()
     private var tap: CFMachPort?
 
+    /// §10.4's arbiter, and the only piece of the priority stack that cannot live
+    /// on the main actor: priority 1 is the recognizer's, it runs on this thread,
+    /// and it has to disarm the gesture synchronously. `emit` sets this while the
+    /// recognizer is still inside `handle`, so an Escape that produced an abort is
+    /// spent by the time the line below reads it — which is what makes "exactly
+    /// one action fires" true rather than hoped for.
+    private var abortedThisEvent = false
+
     private init() {}
 
     /// The keycodes this file compares against, and the complete list.
@@ -55,7 +63,7 @@ final class EventTap {
     /// fires on Sotto's own output. The poster arrives with those two call sites — the
     /// filter is here now because a tap that forgets it fails in a way that looks like a
     /// timing bug rather than a missing line.
-    static let syntheticMarker: Int64 = 0x536F_7474 // "Sott"
+    nonisolated static let syntheticMarker: Int64 = 0x536F_7474 // "Sott"
 
     func install() {
         // §2.4: asked at first use of the feature that needs it, and the gestures are
@@ -71,24 +79,18 @@ final class EventTap {
         thread.start()
     }
 
-    /// What each gesture signal does, and the whole of slice 3's wiring so far.
-    ///
-    /// **The waveform is not hearing anything yet.** Capture, VAD, and chunking
-    /// land later in this slice; until they do, `recording` carries a constant
-    /// level so the surface can be looked at, and that constant is the seam the
-    /// real level meter attaches to. Nothing here claims a transcription
-    /// happened, which is why `stop` takes the HUD away rather than morphing it
-    /// into "Copied to clipboard" — that message arrives with the thing that
-    /// makes it true.
+    /// What each gesture signal does. `Dictation` owns the HUD, the idle signal,
+    /// and everything downstream of them; this is the whole of the connection
+    /// between the two files.
     @MainActor
     private static func route(_ signal: GestureSignal) {
         switch signal {
         case .pushToTalk, .latched:
-            Activity.shared.set(.recording, true)
-            HUDPanel.shared.show(.recording(level: 1))
-        case .stop, .abort:
-            Activity.shared.set(.recording, false)
-            HUDPanel.shared.hide()
+            Dictation.shared.start()
+        case .stop:
+            Dictation.shared.stop()
+        case .abort:
+            Dictation.shared.abort()
         case .overlay:
             break // Slice 9.
         }
@@ -107,8 +109,9 @@ final class EventTap {
             ) { _ in body() }
             CFRunLoopAddTimer(CFRunLoopGetCurrent(), timer, .commonModes)
         }
-        recognizer.emit = { [log] signal in
+        recognizer.emit = { [self] signal in
             log.notice("\(signal.rawValue, privacy: .public)")
+            if signal == .abort { abortedThisEvent = true }
             // The state machine runs on the tap thread (§2.5); everything it
             // drives is main-actor. Hopping here rather than inside `HUDPanel`
             // keeps the thread boundary at the one place it is crossed.
@@ -189,7 +192,14 @@ final class EventTap {
                 return pass // Every other modifier, discarded without being looked at.
             }
         case .keyDown:
-            disposition = recognizer.handle(.otherKeyDown(isEscape: keycode == Key.escape))
+            let isEscape = keycode == Key.escape
+            abortedThisEvent = false
+            disposition = recognizer.handle(.otherKeyDown(isEscape: isEscape))
+            if isEscape, !abortedThisEvent {
+                // Priority 2. Priorities 3 and 4 are slice 9's and go on the end
+                // of this chain, each returning whether it fired.
+                DispatchQueue.main.async { Dictation.shared.cancelTranscription() }
+            }
         case .keyUp:
             disposition = recognizer.handle(.otherKeyUp)
         default:
