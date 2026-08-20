@@ -41,8 +41,10 @@ actor Transcription {
     /// second dictation of every launch (2026-08-19). A module belongs to one
     /// analyzer for its lifetime.
     private var engine: Engine?
+    private var detector: SpeechDetector?
     private var analyzer: SpeechAnalyzer?
     private var collector: Task<Draft, Error>?
+    private var pauseCollector: Task<[Draft.Pause], Error>?
 
     private init() {}
 
@@ -50,14 +52,24 @@ actor Transcription {
     /// `endTime` is never read (§9.3), which sidesteps a bug class and is
     /// independently validated by the measurement: word starts hit a bounded
     /// floor, sentence ends smear to +1075 ms at long pauses.
+    ///
+    /// `pauses` come from `SpeechDetector` on the same analyzer. Slice 4's
+    /// chunker is gone; the detector is what is left of that slice, folded
+    /// into history so cleanup (§4.6) and the sidecar have something to store.
     struct Draft: Sendable {
-        struct Word: Sendable {
+        struct Word: Sendable, Codable, Equatable {
             let text: String
             let start: TimeInterval
         }
 
+        struct Pause: Sendable, Codable, Equatable {
+            let start: TimeInterval
+            let duration: TimeInterval
+        }
+
         var text: String
         var words: [Word]
+        var pauses: [Pause]
     }
 
     enum Failure: LocalizedError {
@@ -94,10 +106,17 @@ actor Transcription {
             // A module built only to be asked two questions and thrown away; it
             // never meets an analyzer, so the one-analyzer rule above is intact.
             let probe = kind.makeEngine().module
+            // Preinstalled. Included so the format we cache is one both
+            // modules will accept; a detector-incompatible format would
+            // make pause collection fail on every recording.
+            let detector = SpeechDetector()
             guard await AssetInventory.status(forModules: [probe]) == .installed else {
                 throw Failure.localeNotInstalled(kind.locale)
             }
-            format = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [probe])
+            format = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [probe, detector])
+            if format == nil {
+                format = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [probe])
+            }
             self.kind = kind
             log.notice("""
                 Transcriber ready: \(kind.label, privacy: .public) \
@@ -121,9 +140,17 @@ actor Transcription {
 
         let engine = kind.makeEngine()
         self.engine = engine
-        let analyzer = SpeechAnalyzer(modules: [engine.module])
+        // Fresh module per recording, same rule as the transcriber. `reportResults`
+        // is what fills `results`; the convenience init does not.
+        let detector = SpeechDetector(
+            detectionOptions: .init(sensitivityLevel: .medium),
+            reportResults: true
+        )
+        self.detector = detector
+        let analyzer = SpeechAnalyzer(modules: [engine.module, detector])
         self.analyzer = analyzer
         collector = Task { try await engine.collect() }
+        pauseCollector = Task { try await Self.collectPauses(detector) }
         try await analyzer.start(inputSequence: inputs)
     }
 
@@ -134,7 +161,10 @@ actor Transcription {
         defer { teardown() }
         guard let analyzer, let collector else { throw Failure.notPrepared }
         try await analyzer.finalizeAndFinishThroughEndOfInput()
-        return try await collector.value
+        var draft = try await collector.value
+        // A detector failure must not take the transcript with it.
+        draft.pauses = (try? await pauseCollector?.value) ?? []
+        return draft
     }
 
     /// Escape priority 2 (§10.4). Throws away whatever has been transcribed —
@@ -142,13 +172,16 @@ actor Transcription {
     func cancel() async {
         await analyzer?.cancelAndFinishNow()
         collector?.cancel()
+        pauseCollector?.cancel()
         teardown()
     }
 
     private func teardown() {
         analyzer = nil
         collector = nil
+        pauseCollector = nil
         engine = nil
+        detector = nil
     }
 
     // MARK: - The two transcribers
@@ -233,7 +266,7 @@ actor Transcription {
     /// for, and `isFinal` is what drops the volatile spans nothing here wants.
     private static func drain<S: AsyncSequence>(_ results: S) async throws -> Draft
     where S.Element: SpeechModuleResult & Textual {
-        var draft = Draft(text: "", words: [])
+        var draft = Draft(text: "", words: [], pauses: [])
         for try await result in results where result.isFinal {
             let text = result.text
             draft.text += String(text.characters)
@@ -249,6 +282,18 @@ actor Transcription {
         }
         draft.text = draft.text.trimmingCharacters(in: .whitespacesAndNewlines)
         return draft
+    }
+
+    /// Silence ranges from `SpeechDetector`. Anything under 80 ms is treated as
+    /// a flap, not a pause cleanup would want.
+    private static func collectPauses(_ detector: SpeechDetector) async throws -> [Draft.Pause] {
+        var pauses: [Draft.Pause] = []
+        for try await result in detector.results where result.isFinal && !result.speechDetected {
+            let duration = result.range.duration.seconds
+            guard duration >= 0.08 else { continue }
+            pauses.append(.init(start: result.range.start.seconds, duration: duration))
+        }
+        return pauses
     }
 }
 

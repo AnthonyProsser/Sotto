@@ -109,8 +109,17 @@ final class Dictation {
         pipeline = Task {
             do {
                 let draft = try await Transcription.shared.finish()
+                let recording = AudioCapture.shared.takeRecording()
                 deliver(draft)
+                if let recording, !draft.text.isEmpty {
+                    AudioHistory.record(
+                        draft: draft,
+                        buffers: recording.buffers,
+                        format: recording.format
+                    )
+                }
             } catch {
+                AudioCapture.shared.discardRecording()
                 // **A cancelled pipeline is not a failed one.** Escape (either
                 // priority) and a chord both cancel this task, and the `await`
                 // above then throws `CancellationError` — reported, that puts
@@ -152,6 +161,7 @@ final class Dictation {
 
     private func cancelPipeline() {
         AudioCapture.shared.stop()
+        AudioCapture.shared.discardRecording()
         pipeline?.cancel()
         pipeline = nil
         Task { await Transcription.shared.cancel() }

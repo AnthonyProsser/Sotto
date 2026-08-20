@@ -67,6 +67,13 @@ Do not build past one of these without asking — `.claude/rules/open-questions.
 
 - **Apple Speech is the only backend.** No Parakeet, FluidAudio, Silero, or Whisper, and **no backend-selection seam built on spec** — a second engine stays possible in a later version behind §2.2's interface, but v1 does not carry scaffolding for one. `rules/audio-and-transcription.md` §1.0.
 - **STT and the LLM share the ANE**, so the slice may not assume they are on different blocks. Mic-rate capture may overlap Foundation Models freely; that is measured, not assumed.
+- **The audio chunker is skipped.** Pause collection (`SpeechDetector`) and keeping the PCM moved to slice 5. Do not resurrect `chunkFloor` / `maxChunk` / discard-and-retranscribe.
+
+### Slice 5 — History storage
+
+- **Obsidian is not a feature** (`DECISIONS.md`, 2026-08-19). The chat writer is `chat.md` + `attachments/` because that is the data, not because of a vault. No sample vault, no Obsidian check. The writer ships with no caller; slice 9 is the first real chat.
+- **Audio entries are a folder with `audio.caf` (Opus @ 24 kbps) and pretty-printed `entry.json`.** Inspectable in any text reader. Ring of 8, pin, "never delete" at limit 0.
+- **`cleaned`, `profile`, and `languages` are empty slots.** Do not invent values. Slice 11 fills them — see the Slice 11 amendment below.
 
 ### Slice 9 — Overlay and chat · Slice 14 — File transcription
 
@@ -78,5 +85,6 @@ Do not build past one of these without asking — `.claude/rules/open-questions.
 - **Cleanup defaults to Apple's on-device model**, with `Guardrails.permissiveContentTransformations`. Still per-profile.
 - **Fix the self-correction instruction.** Measured: the model preserves "no wait, actually" instead of resolving to what the speaker settled on, which is what §4.6 asks for.
 - **Fill the prewarm seam** slice 3 left; never set `Activity.Contributor.cleanup` for a prewarm.
+- **Fill the three empty slots on `AudioEntry`.** Slice 5 writes `cleaned`, `profile`, and `languages` as `nil` / `[]` so the on-disk shape does not change later. Cleanup writes `cleaned`. The active profile's name writes `profile`. Detected languages write `languages` — Apple Speech does not emit Whisper-style language tokens, so decide the source here rather than assuming one. The sidecar is `Sotto/History/AudioHistory.swift`.
 
 Full reasoning for all of these is in `rules/audio-and-transcription.md` §3.1 and `rules/models-and-network.md` §1.1.
