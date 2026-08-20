@@ -42,11 +42,40 @@ enum Insertion {
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(
             system, kAXFocusedUIElementAttribute as CFString, &value
-        ) == .success else { return nil }
+        ) == .success else {
+            wakeElectronAccessibility()
+            return nil
+        }
         guard let element = value, CFGetTypeID(element) == AXUIElementGetTypeID() else { return nil }
         let focused = element as! AXUIElement
         AXUIElementSetMessagingTimeout(focused, 1.0)
         return focused
+    }
+
+    /// **Chromium ships its accessibility tree switched off, and an Electron app
+    /// with it off has no focused element at all** — not an unwritable one, none.
+    /// Sotto reads that as §3's no-focused-field case and goes to the clipboard,
+    /// which is why dictating into an Electron editor copied instead of inserting
+    /// (measured against T3 Code, 2026-08-19: `AXWindows` empty, `AXFocusedUIElement`
+    /// `kAXErrorNoValue`; after this one call the same element reports `AXTextArea`
+    /// with `AXValue` settable, `AXSelectedTextRange`, and `AXNumberOfCharacters`).
+    ///
+    /// `AXManualAccessibility` rather than `AXEnhancedUserInterface`: both switch
+    /// the tree on, but the latter is VoiceOver's flag and apps change window
+    /// behaviour when they see it. Unsupported everywhere else, where the set call
+    /// fails and costs nothing — hence no app check.
+    ///
+    /// **Fired on the failed read, and deliberately not retried here.** The tree
+    /// takes about a second to build, and this call sits on the main thread at the
+    /// moment the user is waiting for their text. It does not need to block:
+    /// `selectedText()` runs the same lookup when the gesture arms (§4.9), so the
+    /// switch is thrown while the user is still speaking and the tree is up long
+    /// before `insert()` asks again.
+    private static func wakeElectronAccessibility() {
+        guard let frontmost = NSWorkspace.shared.frontmostApplication else { return }
+        let app = AXUIElementCreateApplication(frontmost.processIdentifier)
+        AXUIElementSetMessagingTimeout(app, 1.0)
+        AXUIElementSetAttributeValue(app, "AXManualAccessibility" as CFString, kCFBooleanTrue)
     }
 
     /// §3's test: `AXRole` is `AXTextField`/`AXTextArea`, **or** `AXValue` is
@@ -70,6 +99,56 @@ enum Insertion {
             return nil
         }
         return value as? T
+    }
+
+    // MARK: - Spacing (§3)
+
+    /// **A space when the caret sits hard against the previous word, and nothing
+    /// otherwise.** Dictating with the caret straight after `word` produced
+    /// `wordThe transcript`, because the transcriber has no idea what is already
+    /// on the other side of the insertion point and cleanup capitalises a first
+    /// word rather than spacing it.
+    ///
+    /// Openers are the exception that stops the rule being a nuisance: text
+    /// dictated after `(` or an opening quote belongs against it, which is the
+    /// same convention every text editor's own word logic uses. A closing bracket
+    /// is not in the set — it ends a word, so the space is wanted.
+    ///
+    /// **Computed once, before the ladder chooses a rung**, so the paste path gets
+    /// the same answer as the AX path. Apps that refuse the write still answer the
+    /// read: WebKit and Chromium both expose `AXSelectedTextRange` whether or not
+    /// they honour `AXSelectedText`.
+    ///
+    /// **No read means no space**, which is the safe direction: a missing space is
+    /// a keystroke to fix, a spurious one appears in text the user did not touch.
+    private static func leadingSpace(for element: AXUIElement) -> String {
+        guard let preceding = characterBeforeCaret(element) else { return "" }
+        guard !preceding.isWhitespace, !"([{<\u{201C}\u{2018}\"'".contains(preceding) else { return "" }
+        return " "
+    }
+
+    /// `AXSelectedTextRange` for the caret, then `AXStringForRange` for the one
+    /// character in front of it. **One character, not the value** — the same
+    /// reason `insert()` measures with `AXNumberOfCharacters`: reading `AXValue`
+    /// drags the whole document across the AX boundary, and the document can be a
+    /// book.
+    private static func characterBeforeCaret(_ element: AXUIElement) -> Character? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(
+            element, kAXSelectedTextRangeAttribute as CFString, &value
+        ) == .success,
+            let raw = value, CFGetTypeID(raw) == AXValueGetTypeID() else { return nil }
+
+        var caret = CFRange()
+        guard AXValueGetValue(raw as! AXValue, .cfRange, &caret), caret.location > 0 else { return nil }
+
+        var preceding = CFRange(location: caret.location - 1, length: 1)
+        guard let parameter = AXValueCreate(.cfRange, &preceding) else { return nil }
+        var result: CFTypeRef?
+        guard AXUIElementCopyParameterizedAttributeValue(
+            element, kAXStringForRangeParameterizedAttribute as CFString, parameter, &result
+        ) == .success else { return nil }
+        return (result as? String)?.last
     }
 
     // MARK: - Selection (§3, §4.9)
@@ -155,6 +234,7 @@ enum Insertion {
         //    the document can be a book. A same-length replacement would defeat
         //    it and cannot arise here — a selection routes to chat (§4.9), so
         //    insertion always runs against a bare caret.
+        let text = leadingSpace(for: element) + text
         let before: Int? = attribute(element, kAXNumberOfCharactersAttribute)
         if AXUIElementSetAttributeValue(
             element, kAXSelectedTextAttribute as CFString, text as CFTypeRef
