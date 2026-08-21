@@ -14,6 +14,10 @@ Ordering rule throughout: nothing depends on something built later, and every sl
 
 **Working rhythm:** design the slice in Claude Design, screenshot it, hand it over, build it in Swift, use it, move on. When designs arrive, expect them to be wrong about material in four specific ways — corners render as circular arcs, blur is not refraction, there is no adaptive tint, there is no specular edge. **Judge proportion from a mockup; judge material only in Swift (§14.9).**
 
+**The Done-when line is the ceiling as well as the criterion.** When you can do what it describes and you have watched yourself do it, the slice is finished (`CLAUDE.md` §0.6). Items the build order gives to a later slice are not yours, and an ambiguity the Done-when line does not touch is not yours to settle — leave the seam where a cross-slice thread in §3 says to leave one, and nothing more.
+
+**A slice marked "Design: heavy" that reaches a build session with its design pass still open is a routing problem, not a licence to run the pass.** Build the core behaviour on the smallest reasonable local choices (`CLAUDE.md` §0.7), and list the material unresolved ones at the top of your reply, one line each, for Anthony to rule on. **Do not spend the session researching every visible number** — a build session that becomes a design session costs an hour and still produces choices he has to review.
+
 ---
 
 ## 2. Slice 1 — Shell
@@ -56,7 +60,9 @@ Do not build past one of these without asking — `.claude/rules/open-questions.
 
 ## 5. Build-order amendments not yet folded back
 
-**`docs/sotto-build-order.md` is read-only (`CLAUDE.md` §0), so amendments live here until Anthony folds them in.** Each one is also a `DECISIONS.md` row; this section exists because §0.1 sends future sessions to the build order first, and the build order does not yet know about any of these. **When an entry has been folded back, delete it from here** — a duplicate that outlives its source is how two documents start disagreeing.
+**`docs/sotto-build-order.md` is read-only (`CLAUDE.md` §0), so amendments live here until Anthony folds them in.** §0.1 sends future sessions to the build order first, and it does not yet know about any of these.
+
+**One line each: what changed, and where the reasoning is.** A reader needs to know the build order is wrong on that point and where to read why — `DECISIONS.md` owns the argument, and restating it in both files is how two documents start disagreeing. Only an amendment with no `DECISIONS.md` row carries its own reason here. **When an entry has been folded back, delete it.**
 
 ### Slice 3 — Dictation core
 
@@ -77,14 +83,14 @@ Do not build past one of these without asking — `.claude/rules/open-questions.
 
 ### Slice 6 — Audio workspace
 
-- **The sidebar gained two commands the build order does not list: `Delete…` behind a confirmation, and `Reveal in Finder`.** §9.2's retention ring and pin flag were the only way anything left the store, which left no way to remove one recording on purpose. Both are in the row's context menu.
-- **The transport is a waveform of the whole recording, not a scrubber.** Click or drag anywhere on it seeks. Voice Memos is the system reference.
-- **Raw is the default transcript side, and clicking a word seeks only there** — `words` indexes raw, and cleanup rewrites that text without re-timing it. The `Cleaned` segment is visible and disabled with the reason in its tooltip until slice 11 writes `cleaned`.
-- **`Transcribe File…` is a disabled stub with a tooltip.** Slice 14 fills it; the button exists here so the empty state has somewhere to point.
-- **Pause markers come off for display** via `AudioHistory.unmark`, the inverse of `mark`. They stay in `entry.raw` on disk.
-- **The search field is applied to the sidebar column, not inside a mode's list.** `.searchable(placement: .sidebar)` renders at the top of the column wherever it is written, so the mode switches the binding rather than the field.
-- **`Recording.duration` is read from the CAF header, not stored.** Slice 5's `AudioEntry` schema is unchanged — a fourth slot would have to be backfilled into every existing entry to be trustworthy.
-- **Open, and not for a future session to settle quietly: the sidebar's column width.** No width is set anywhere, so `NavigationSplitView` collapses the column to ~140 pt, which truncates row titles to about three words. There is no system constant — `NSSplitViewController.minimumThicknessForInlineSidebars` returns the unset sentinel — so fixing it means an authored number, which is a tier-2 token. **Put it to Anthony.**
+- **The sidebar context menu gains `Delete…` behind a confirmation, and `Reveal in Finder`** — `DECISIONS.md` 2026-08-20.
+- **The transport is a waveform of the whole recording, not a scrubber; click or drag anywhere seeks** — `DECISIONS.md` 2026-08-20.
+- **Raw is the default transcript side and clicking a word seeks only there; `Cleaned` stays visible and disabled until slice 11** — `DECISIONS.md` 2026-08-20.
+- **Pause markers come off for display** via `AudioHistory.unmark` and stay in `entry.raw` on disk — `DECISIONS.md` 2026-08-20.
+- **The search field is applied to the sidebar column, not inside a mode's list** — `DECISIONS.md` 2026-08-20.
+- **`Transcribe File…` is a disabled stub with a tooltip.** Slice 14 fills it; the button exists here so the empty state has somewhere to point. No `DECISIONS.md` row.
+- **`Recording.duration` is read from the CAF header, not stored.** Slice 5's `AudioEntry` schema is unchanged — a fourth slot would have to be backfilled into every existing entry to be trustworthy. No `DECISIONS.md` row.
+- **The sidebar column width is unset, so `NavigationSplitView` collapses it to ~140 pt and truncates row titles to about three words.** There is no system constant. Under `CLAUDE.md` §0.7 and `rules/design.md` §1 this is a local constant, not a tier-2 token: the next session working that pane picks a width, writes it in the view, and says so in one line. **The earlier instruction to put it to Anthony is withdrawn** — it was escalated under the rules as they stood before 2026-08-21.
 
 ### Slice 9 — Overlay and chat · Slice 14 — File transcription
 
