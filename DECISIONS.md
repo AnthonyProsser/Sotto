@@ -17,7 +17,9 @@ Until step 4, the copies in `docs/` are out of date on that point. That is fine 
 
 **What belongs here:** anything that contradicts, extends, or resolves the spec. A new tier-2 token row. A constant that turned out wrong in practice. A rule that could not be implemented as written. An open issue from §12 that got settled. A number that was a placeholder and is now real.
 
-**What does not:** ordinary implementation choices the spec does not speak to. Naming a Swift type, splitting a file, picking a collection type. If the spec has no opinion, neither does this file.
+**What does not:** ordinary implementation choices the spec does not speak to. Naming a Swift type, splitting a file, picking a collection type, an ordinary layout dimension, a spacing value, a local default. If the spec has no opinion, neither does this file. **An authored value is not automatically a row either** — a trivial one-consumer constant is not a token and not an entry (`rules/design.md` §9).
+
+**The test is cost of reversal, not how unsure you were.** A choice Anthony can overturn in one word belongs in your reply, once, not in this file forever. Every row here is read by every future session; a row that did not need to exist is a permanent tax on all of them.
 
 ## Entry template
 

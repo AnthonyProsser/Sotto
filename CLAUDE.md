@@ -38,7 +38,7 @@ Anthony folds `DECISIONS.md` entries back into the real spec in `Documents/Sotto
 
 | About to | Open |
 |---|---|
-| Put pixels on screen — a view, a material, a radius, a mockup conversion, **any numeric or hex literal in a view** | `.claude/rules/design.md`, **all 351 lines of it.** Authoring or changing what is drawn is the case it exists for, and its fast path (§1 → §3 → §9) is a starting order, not a licence to stop there |
+| Put pixels on screen — a view, a material, a radius, a mockup conversion, **any numeric or hex literal in a view** | `.claude/rules/design.md`, **all of it.** Authoring or changing what is drawn is the case it exists for, and its fast path (§1 → §3 → §9) is a starting order, not a licence to stop there |
 | Edit view code **without changing what is drawn** — a rename, a binding, an `isHidden` fix | `design.md`'s §14 grep, and whichever sections its own index sends you to. A non-visual edit does not earn the full read; **`CLAUDE.md` §0.4 still applies** — if the result looks different, you were wrong about it being non-visual |
 | Touch the event tap, a gesture, a hotkey, Escape, the activation policy, or writing text into another app | `.claude/rules/input-and-insertion.md` |
 | Touch capture, chunking, transcription, word timings, seek, or the HUD's content | `.claude/rules/audio-and-transcription.md` |
@@ -74,8 +74,8 @@ Work that spans two areas opens both. **Beyond two, the slice is the router, not
 **Three tiers, because "ask when unsure" turns into asking about everything.** Sort what you found before you interrupt:
 
 1. **The documents decide it** → follow them. No question, no report.
-2. **Nothing decides it, and the choice is implementation-local** — a name, a file split, an order of operations, anything invisible in the built app → **decide it yourself** using the nearest existing convention, and note it in one clause. Silence from the documents is permission, not a blocker.
-3. **A contradiction, one of §2's eight, or a choice a user would notice** — behaviour, wording, a surface, a number that ships → **ask.** These are the ones where a wrong guess looks settled.
+2. **Nothing decides it, and the choice is small and local** — a name, a file split, an order of operations, a layout dimension, a spacing value, a local default → **decide it yourself** using the nearest existing convention, and note it in one clause. §0.7 defines what counts. Silence from the documents is permission, not a blocker.
+3. **A contradiction, one of §2's seven, or a choice that sets architecture, shared behaviour, product behaviour, or a locked measurement** → **ask.** These are the ones where a wrong guess looks settled. **Visible is not the test** — a pane inset ships and is tier 2; the side a transcript toggle opens on ships and is tier 3.
 
 **Report the search only when it changed something.** A contradiction found, a decision taken under tier 2, a document that turned out stale — those go in the reply. A search that confirmed what you already intended to do does not; do the work instead of narrating the reading.
 
@@ -108,7 +108,7 @@ A session ends and takes its context with it. An instruction given three times a
 - **Delete on the way past.** Code that a change made dead goes in the same commit as the change.
 - **This does not license clever.** Fewest lines is not the goal — fewest *concepts* is. One well-named function used in four places beats a dense one-liner nobody can modify.
 
-**One stated exception:** the token layer's indirection, because §14.2's inherited-vs-authored boundary has to stay auditable in one file (`rules/design.md` §9). A stated exception with a reason is the only kind that counts.
+**One stated exception:** the token layer's indirection **for authored (tier-2) values**, because §14.2's inherited-vs-authored boundary has to stay auditable in one file (`rules/design.md` §9). It does not extend to a tier-1 row that aliases a system value for a single consumer — that is indirection over an alias, and this section applies to it normally. A stated exception with a reason is the only kind that counts.
 
 ---
 
@@ -132,7 +132,7 @@ This is here rather than in `rules/design.md` because the case that produced it 
 
 ---
 
-## 0.6 State what would prove it worked, before writing it
+## 0.6 State what would prove it worked, then check it, then stop
 
 **A vague task is not a task yet. Settle what would prove it worked before writing it, then go and check.** For a slice, `docs/sotto-build-order.md` supplies the line — its **Done when** clause is the criterion and it is not optional. For anything else, decide one yourself. **Keep it to yourself unless it changes the scope**, or the task was loose enough that Anthony might have meant a different bar; §0.1's reporting rule holds here too. The criterion exists to steer the work, not to be announced before it.
 
@@ -140,7 +140,29 @@ This is here rather than in `rules/design.md` because the case that produced it 
 
 **Assume the first attempt is wrong and leave room to find out.** The expensive failure mode is a long confident linear run that was mistaken at step two and never checked until step nine. Short loop, real output, adjust. This is the same instinct as §0.1's read-before-build, applied to the end of the work instead of the start.
 
+**Then stop. The criterion is a ceiling as well as a floor.** When the **Done when** line is satisfied and you have watched the behaviour it names actually work, the work is verified and you are finished. Going further needs a **named suspicion** — a specific thing you think is broken and can say out loud — not a general sense that more could be checked. If you cannot name it, there is nothing left to find. **A concrete anomaly is always a named suspicion**; chase that one to the end.
+
+**Before treating an anomaly as a defect in Sotto, suspect the harness.** Screenshots, `System Events`, `xcodebuild` and `DEVELOPER_DIR`, TCC grants, and synthetic events have each produced a convincing false failure in this repo — the catalogues are `rules/input-and-insertion.md` §5.1 and `rules/design.md` §8.1–8.2. One cheap check that the tool is telling the truth comes before reading the state machine.
+
 **One rejection worth keeping, in one line:** proposals to collapse `.claude/rules/*` back into this file have been made and refused twice, for the reason at the top of this file.
+
+---
+
+## 0.7 Proportion — what a decision is, and what is just a choice
+
+**When these conflict, the higher number wins. The list does not say what to skip; it says what to spend the next twenty minutes on.**
+
+1. **Correctness, and explicit product or design requirements** — the slice's **Done when** line, a locked measurement, an instruction Anthony gave.
+2. **The existing architecture, and reuse** (§0.3).
+3. **The simplest implementation that satisfies 1 and 2.**
+4. **Decisions that materially affect a later slice**, and only those.
+5. **Documentation, tokens, and polish.**
+
+**A small, local choice that is easy to reverse and does not establish architecture, shared behaviour, or a product requirement is not a decision. Make the smallest reasonable choice and continue.** Ordinary layout dimensions, spacing, local sizing, a file split, a helper's name, a local default. Take the nearest existing convention, spend one clause on it in the reply, and do not stop implementing to prove it.
+
+**It is a decision — §0.1 tier 3 — when it sets an architectural pattern, changes behaviour the user relies on, is shared across surfaces, reaches into more than one slice, or contradicts something the spec or a design document already states.** Those are never taken silently, and being cheap to type is not evidence that a choice is cheap to reverse.
+
+**When tier 3 says ask and Anthony is not there to answer, do not escalate into research.** Make the smallest reasonable choice, ship it, and put the question at the top of your reply in one line so he can overrule it in one word. Research is for a question you can answer; this is a question only he can answer.
 
 ---
 
@@ -207,4 +229,6 @@ Also gone: the Out-of-scope section, insert-mode in profiles, and the zero-outbo
 
 ## 5. Voice, for anything you write in these files
 
-Anthony's documents are reasons-first: they name the rejected option and say why it lost, and they end sections with a verdict. Match it. Dense, no padding, no cheerleading. When you disagree with a decision, say so with the reason and let him rule — **a silent workaround in code is the one failure mode this whole structure is built to prevent.**
+Anthony's documents are reasons-first: they name the rejected option and say why it lost, and they end sections with a verdict. Match it. Dense, no padding, no cheerleading.
+
+**This voice governs the rule files, `DECISIONS.md`, and your replies. It does not govern source comments.** In Swift, match the surrounding file (§0.5) and keep a comment proportional to what it explains: a line about why a non-obvious thing is done that way, not a decision record. When the reasoning is long enough to argue a case, it belongs in `DECISIONS.md` and the code carries a pointer to it. When you disagree with a decision, say so with the reason and let him rule — **a silent workaround in code is the one failure mode this whole structure is built to prevent.**

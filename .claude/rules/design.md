@@ -28,7 +28,9 @@ This file combines general macOS practice and Sotto-specific rules. Keep one fil
 | 2 | Derived system value | `outerRadius - inset`, text-style size × multiplier |
 | 3 | Authored value | Only when 1–2 fail; name the closest rejected system API and why |
 
-"Nothing fits" is not evidence. If you cannot name the rejected API, search first. This is also required for tier-2 tokens (§9).
+**"Nothing fits" is not evidence — if you cannot name the rejected API, search first.** That burden is on material, colour, type, corner geometry, controls, and any measurement the spec, `sotto-tokens.md` §6, or a `DECISIONS.md` row has already fixed. Those are where a literal means a system API was missed, and where being wrong is expensive.
+
+**It is not on an ordinary layout dimension** — a column width, a pane inset, a row height, spacing between two things macOS has no opinion about. There is no system metric for those and the search returns nothing; pick the value, write it as a local constant in the view that draws it, and move on (§9, `CLAUDE.md` §0.7). If one is load-bearing and you cannot choose it, ship your best guess and say so in one line — a pane nobody can read is worse than a width Anthony changes in one edit.
 
 ## 2. View preflight
 
@@ -263,9 +265,13 @@ Each row makes four claims:
 | 1. Inherited | system semantic color, material, font, or metric |
 | 2. Authored | Sotto value required because no system value fits |
 
-There is no tier 3 or `state.*` namespace. Tier 2 is permanent debt and should approach zero. Only these entries are pre-approved: waveform idle treatment (slice 3); `scrim.fill`/`scrim.text` (slice 13); overlay intrusiveness values—width ratio, padding, stroke, shadow, position, density (slice 9). Propose any fourth to Anthony, make the four claims aloud, and log it in `DECISIONS.md`.
+There is no tier 3 or `state.*` namespace. Tier 2 is permanent debt and should approach zero. Pre-approved: waveform idle treatment (slice 3); `scrim.fill`/`scrim.text` (slice 13); overlay intrusiveness values — width ratio, padding, stroke, shadow, position, density (slice 9).
 
-Components name roles, never literals: `surface.raised` → `.controlBackgroundColor`, including before the row exists. No theme struct, Appearance setting, or system-appearance override. §6 of the token sheet holds locked-but-unbuilt `Design.pdf` measures; look there before inventing a number. The token layer is the explicit exception to `CLAUDE.md` §0.3's least-indirection rule because it makes the inherited/authored boundary auditable.
+**A value earns a row when it is part of the design language** — shared by more than one consumer, locked by the spec or a `DECISIONS.md` row, or materially load-bearing for consistency later. **A trivial one-consumer number that is one edit to change stays a local constant**, including when it is authored and including when it is visible; a row buys indirection and a maintenance claim, not consistency. Tokenising a pane inset because it ships is the failure this paragraph exists to stop.
+
+**A fourth tier-2 row that is part of the design language goes to Anthony with its four claims and a `DECISIONS.md` entry. A trivial constant does not go to him at all, because it is not a row.**
+
+Components name roles wherever a row exists: `surface.raised` → `.controlBackgroundColor`. **Where no row is earned, write the system value directly** — a tier-1 row aliasing `.body` for a single consumer is indirection over an alias (`CLAUDE.md` §0.3). No theme struct, Appearance setting, or system-appearance override. §6 of the token sheet holds locked-but-unbuilt `Design.pdf` measures; look there before inventing a number. The token layer is `CLAUDE.md` §0.3's explicit exception **for authored values**, because it keeps the inherited/authored boundary auditable.
 
 ## 10. Error location
 
@@ -313,17 +319,21 @@ It is an undated, unlocked sketch, not to scale: its 378 × 70/radius 22 compose
 
 ## 13. Open questions
 
-Ask; do not settle. Read `.claude/rules/open-questions.md` before slices 9, 10, or 13.
+**Four are open on the design side — gaps 1, 2, 3 and issue 5. Read `.claude/rules/open-questions.md` before slices 9, 10, or 13, and ask rather than settle.** Issue 2 is closed: all SwiftUI, one `Color` per role (§6.6).
 
-| Item | Question |
-|---|---|
-| Gap 1 | Chat shape: bounded panel, full-height wash, or local fade |
-| Gap 2 | Overlay 118 pt and HUD 8%: fixed value or rule |
-| Gap 3 | Send-button volume |
-| ~~Issue 2~~ | **Closed** — all SwiftUI, one `Color` per role (§6.6) |
-| Issue 5 | Bare compose-bar growth/cap |
+**That duty is to those four by name, and does not generalise.** An undecided number that is not one of them is not an open question — it is `CLAUDE.md` §0.7's small local choice, and §1 and §9 say what to do with it.
 
 ## 14. Before declaring design work done
+
+**Run the grep. Then scale the rest to the surface.** What follows is written for a small floating surface where every pixel is product-defining; run it whole against an ordinary window and it costs rounds re-proving what the system already guarantees.
+
+| Surface | Run |
+|---|---|
+| A floating surface, or any locked measurement | §14.1–14.6 in full |
+| A window, pane, or list built from standard controls | §14.1, §14.2, §14.5, plus **one** screenshot each of the default state and the empty or error state |
+| A view-code edit that changes nothing drawn | The grep and §14.5 |
+
+**§14.3's bright-and-dark desktops and §14.4's German and largest-text checks are for surfaces that float over arbitrary content or size to a single string.** A standard window inherits both. **One screenshot per state, read once** — re-capturing a state to re-confirm an appearance you already read is not verification, it is the loop `CLAUDE.md` §0.6 tells you to close.
 
 Run this grep first:
 
@@ -331,7 +341,7 @@ Run this grep first:
 rg -n '\\.cornerRadius\\(|Color\\(red:|Color\\(hex:|NSColor\\(red:|#[0-9A-Fa-f]{6}|\\.ultraThinMaterial|\\.thinMaterial|\\.regularMaterial|NSVisualEffectView|\\.blur\\(radius:|\\.font\\(\\.system\\(size:|UIScreen|GeometryReader' --glob '*.swift'
 ```
 
-Every hit is a violation or has a comment naming the rejected system API and why. Typical replacements: continuous corners; semantic colors; Glass; text styles; `containerRelativeFrame`/alignment guides instead of `GeometryReader`.
+Every hit is a violation or carries a one-line comment naming the rejected system API and why. Typical replacements: continuous corners; semantic colors; Glass; text styles; `containerRelativeFrame`/alignment guides instead of `GeometryReader`.
 
 ### 14.1 System deference
 
