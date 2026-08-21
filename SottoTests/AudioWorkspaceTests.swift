@@ -117,6 +117,23 @@ struct AudioWorkspaceTests {
             .appendingPathComponent("sotto-absent-\(UUID().uuidString).caf")
         #expect(AudioPlayback.envelope(of: missing, buckets: 64).isEmpty)
     }
+
+    // MARK: - Load failure
+
+    @Test @MainActor func loadDoesNotCommitIdWhenThePlayerCannotOpen() {
+        let playback = AudioPlayback.shared
+        playback.stop()
+        defer { playback.stop() }
+
+        let missing = recording(id: "missing-\(UUID().uuidString)", text: "gone")
+        playback.load(missing)
+        #expect(playback.id == nil)
+
+        // Selecting the same row again has to retry. Committing the id on a
+        // failed open would make this a no-op and leave Play dead.
+        playback.load(missing)
+        #expect(playback.id == nil)
+    }
 }
 
 // MARK: - Fixtures

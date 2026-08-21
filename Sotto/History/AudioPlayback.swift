@@ -53,14 +53,16 @@ final class AudioPlayback {
     // MARK: - Transport
 
     /// Idempotent per recording: selecting the same row twice does not restart it.
+    /// The id is committed only after the player exists, so a missing or unreadable
+    /// file can be asked again instead of leaving Play dead on that row.
     func load(_ recording: AudioLibrary.Recording) {
         guard id != recording.id else { return }
         stop()
+        guard let player = try? AVAudioPlayer(contentsOf: recording.audio) else { return }
+        player.prepareToPlay()
+        self.player = player
         id = recording.id
-        duration = recording.duration
-        player = try? AVAudioPlayer(contentsOf: recording.audio)
-        player?.prepareToPlay()
-        if let player { duration = player.duration }
+        duration = player.duration
 
         let url = recording.audio
         Task.detached(priority: .utility) {
