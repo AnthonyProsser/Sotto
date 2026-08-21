@@ -53,6 +53,9 @@ nonisolated enum AudioHistory {
                     enabled: enabled,
                     ringLimit: limit
                 )
+                await MainActor.run {
+                    NotificationCenter.default.post(name: .audioHistoryDidChange, object: nil)
+                }
             } catch {
                 log.error("History save failed: \(error.localizedDescription, privacy: .public)")
             }
@@ -146,6 +149,20 @@ nonisolated enum AudioHistory {
             result.insert(contentsOf: token, at: index)
         }
         return result
+    }
+
+    /// The inverse of `mark`, and it lives beside it so the two forms of the
+    /// pause marker cannot drift apart.
+    ///
+    /// **Markers are cleanup's input, not the user's text** (§4.6). They go on
+    /// disk because the sidecar has to be able to reproduce what cleanup saw, and
+    /// they come off for display because the Audio pane is §14.4's one long-form
+    /// reading surface — `[pause 240ms]` in the middle of a sentence is a machine
+    /// token in a place a person is reading. Nothing is lost: `pauses` carries the
+    /// same information structured, which is what seek and §4.3's calibration
+    /// read anyway.
+    static func unmark(_ text: String) -> String {
+        text.replacing(/\s*\[pause [0-9]+ms\]/, with: "")
     }
 
     // MARK: -
@@ -309,4 +326,17 @@ nonisolated struct AudioEntry: Sendable, Codable, Equatable {
     var languages: [String]
     var words: [Transcription.Draft.Word]
     var pauses: [Transcription.Draft.Pause]
+}
+
+
+extension Notification.Name {
+    /// Posted on the main queue after a dictation lands on disk, and after the
+    /// Audio workspace pins or deletes one (slice 6).
+    ///
+    /// **A notification rather than an observable on `AudioHistory`** because the
+    /// writer is a `nonisolated enum` reached from a detached task, and giving it
+    /// main-actor state to publish would put the storage layer on the main actor
+    /// to serve a window that is usually closed. `CLAUDE.md` §2's "nothing is a
+    /// notification" is about the user-facing kind — this one is `NotificationCenter`.
+    static let audioHistoryDidChange = Notification.Name("SottoAudioHistoryDidChange")
 }

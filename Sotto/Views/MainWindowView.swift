@@ -14,6 +14,11 @@ import SwiftUI
 final class MainWindowState {
     var mode: Mode = .chat
     var showingSettings = false
+    /// Slice 10's, held here for the same reason the Audio side's lives on
+    /// `AudioLibrary`: §10.2 scopes search to the mode, so each mode keeps its own
+    /// text and switching modes never carries a query across.
+    var chatSearch = ""
+
     var settingsSection: SettingsSection = .general
     var columns: NavigationSplitViewVisibility = .all
 }
@@ -82,6 +87,11 @@ enum SettingsSection: CaseIterable, Identifiable {
 struct MainWindowView: View {
     @Bindable var state: MainWindowState
 
+    /// Shared rather than owned: the ring can evict a recording while the window
+    /// is closed, so the list has to be reloadable from outside any view's
+    /// lifetime. `MainWindowController` refreshes it on open.
+    @Bindable private var library = AudioLibrary.shared
+
     /// Ties the one selection capsule to whichever segment is current, so the
     /// capsule moves rather than being redrawn in a new place.
     @Namespace private var modeSelection
@@ -104,7 +114,23 @@ struct MainWindowView: View {
     /// corner. SwiftUI insets the sidebar's content below them on its own, and draws
     /// the sidebar toggle at the trailing end of the same strip — so neither the
     /// inset nor the toggle is authored here.
+    @ViewBuilder
     private var sidebar: some View {
+        // **The search field is applied here and not inside the mode's list.**
+        // `.searchable(placement: .sidebar)` always renders at the top of the
+        // sidebar column no matter how deep it is written, so a per-mode field
+        // appeared and vanished and the Chat/Audio pill moved underneath it.
+        // Scoping is the binding — one field, one text per mode. Settings is a
+        // page rather than a mode and has nothing to search.
+        if state.showingSettings {
+            sidebarContent
+        } else {
+            sidebarContent
+                .searchable(text: searchText, placement: .sidebar, prompt: searchPrompt)
+        }
+    }
+
+    private var sidebarContent: some View {
         VStack(spacing: 0) {
             if state.showingSettings {
                 settingsSections
@@ -115,6 +141,20 @@ struct MainWindowView: View {
 
             Divider()
             bottomRow
+        }
+    }
+
+    private var searchText: Binding<String> {
+        switch state.mode {
+        case .chat: $state.chatSearch
+        case .audio: $library.search
+        }
+    }
+
+    private var searchPrompt: Text {
+        switch state.mode {
+        case .chat: Text("Search Chats")
+        case .audio: Text("Search Recordings")
         }
     }
 
@@ -183,10 +223,20 @@ struct MainWindowView: View {
         .padding(.bottom)
     }
 
-    /// The chat list (slice 10) and the recording list (slice 6) land here.
+    /// The recording list is slice 6's; the chat list is slice 10's and is still
+    /// the empty `List` slice 1 left. **Each mode owns its own search field**
+    /// (§10.2), which is why `.searchable` is inside `AudioSidebar` rather than
+    /// out here — a field applied to the sidebar itself would survive a mode
+    /// switch and search the wrong thing.
+    @ViewBuilder
     private var modeList: some View {
-        List {}
-            .listStyle(.sidebar)
+        switch state.mode {
+        case .chat:
+            List {}
+                .listStyle(.sidebar)
+        case .audio:
+            AudioSidebar(library: library)
+        }
     }
 
     private var settingsSections: some View {
@@ -227,7 +277,12 @@ struct MainWindowView: View {
                 systemImage: state.settingsSection.symbol
             )
         } else {
-            ContentUnavailableView(state.mode.title, systemImage: state.mode.symbol)
+            switch state.mode {
+            case .chat:
+                ContentUnavailableView(state.mode.title, systemImage: state.mode.symbol)
+            case .audio:
+                AudioDetail(library: library)
+            }
         }
     }
 }

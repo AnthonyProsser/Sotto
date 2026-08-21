@@ -61,9 +61,36 @@ extension Token {
 }
 
 /// Text. Expected source: `.labelColor`, `.secondaryLabelColor`,
-/// `.tertiaryLabelColor`. **Empty** — no surface draws text yet.
+/// `.tertiaryLabelColor` for colour; `NSFont.preferredFont(forTextStyle:)` and
+/// its SwiftUI equivalents for type.
+///
+/// **No colour rows.** Every surface built so far draws its text with
+/// `.primary`/`.secondary`, which are the semantic styles under another name and
+/// resolve correctly against glass without a branch (`rules/design.md` §6.7). A
+/// row would be indirection over an alias.
 extension Token {
     enum Text {}
+}
+
+extension Token.Text {
+    /// `text.transcript` — **first consumer: `TranscriptBody`, slice 6.**
+    ///
+    /// Tier 1. §14.4 names five type roles and singles this one out: it is the
+    /// role that is *not* UI chrome — long-form reading text in the audio
+    /// workspace, "tuned for that rather than inherited from `body`."
+    ///
+    /// **It resolves to `.body` anyway, and the tuning is deliberately not
+    /// authored.** §14.4 puts the burden of proof on fixing a size, and there is
+    /// no evidence yet for what the tuning should be — that judgement needs a
+    /// real transcript read at real size on Anthony's display, which is §8.6's
+    /// handoff and not something a build session can settle. The role exists so
+    /// that when it is settled there is one place to change it and every word in
+    /// the pane follows.
+    ///
+    /// Rejected: `.title3`, the next style up, which reads as a heading in a pane
+    /// that already has one; and a fixed point size, which loses the accessibility
+    /// text-size tracking `.body` gets for free.
+    static var transcript: Font { .body }
 }
 
 /// Borders and separators. Expected source: `.separatorColor`.
@@ -171,6 +198,28 @@ extension Token.Authored {
         /// Resting height. Equal to the width, so an idle bar is a dot rather
         /// than a gap — §6.2's resting band was 3.5–6.7 and drifting.
         static let resting: CGFloat = 3.5
+
+        /// `waveform.playbackHeight` — **first consumer: `PlaybackWaveform`,
+        /// slice 6.** The drawn envelope of a finished recording, which is a
+        /// different object from the five values above it: those describe the
+        /// live HUD waveform reporting the microphone, this one describes a
+        /// static picture of a file you can scrub.
+        ///
+        /// **Rejected system value: there is none, and it is the same absence
+        /// that pre-approved the rows above.** macOS publishes no waveform metric
+        /// and no waveform view; `NSLevelIndicator` was already ruled out for the
+        /// HUD and fails here for the same reasons plus one more — it shows a
+        /// single current value, and this shows a whole recording at once.
+        ///
+        /// **`barWidth` and `barGap` are reused rather than re-authored**, so the
+        /// two waveforms are the same drawing at two sizes and there is one
+        /// number here instead of three. Bar *count* is not authored at all: it
+        /// falls out of the pane's width, which is what lets the envelope keep
+        /// its density when the window is resized.
+        ///
+        /// 48 is a starting value on the same footing as `peak` above — §6.2 is
+        /// unlocked and Anthony has not seen this surface at size.
+        static let playbackHeight: CGFloat = 48
     }
 }
 

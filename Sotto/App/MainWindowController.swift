@@ -61,6 +61,17 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         NSApp.activate()
         window?.makeKeyAndOrderFront(nil)
         Activity.shared.set(.mainWindow, true)
+        // The window is usually closed while dictations are being recorded and
+        // evicted, so what the list last held is stale by definition.
+        AudioLibrary.shared.refresh()
+    }
+
+    /// **History…** in the menu bar (§10.1), which is a workspace action and lands
+    /// on the Audio mode rather than wherever the window was left.
+    func show(mode: Mode) {
+        state.showingSettings = false
+        state.mode = mode
+        show()
     }
 
     /// `Cmd+,` and the menu's **Settings…** both land here. Opening the window when

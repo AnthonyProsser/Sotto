@@ -49,7 +49,9 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 
         menu.addItem(.separator())
 
-        menu.addItem(stub("History…", "The audio workspace arrives in a later build."))
+        menu.addItem(
+            action("History…", #selector(AppDelegate.showHistory(_:)), key: "")
+        )
         menu.addItem(
             action("Settings…", #selector(AppDelegate.toggleSettings(_:)), key: ",")
         )
