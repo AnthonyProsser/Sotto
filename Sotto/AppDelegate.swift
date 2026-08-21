@@ -59,4 +59,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     @IBAction func toggleSettings(_ sender: Any?) {
         MainWindowController.shared.toggleSettings()
     }
+
+    /// **History…** in the menu bar (§10.1). Opens the main window on the Audio
+    /// mode — §10.2's workspace, not a quick switch.
+    @IBAction func showHistory(_ sender: Any?) {
+        MainWindowController.shared.show(mode: .audio)
+    }
 }

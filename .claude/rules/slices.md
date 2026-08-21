@@ -75,6 +75,17 @@ Do not build past one of these without asking — `.claude/rules/open-questions.
 - **Audio entries are a folder with `audio.caf` (Opus @ 24 kbps) and pretty-printed `entry.json`.** Inspectable in any text reader. Ring of 8, pin, "never delete" at limit 0.
 - **`cleaned`, `profile`, and `languages` are empty slots.** Do not invent values. Slice 11 fills them — see the Slice 11 amendment below.
 
+### Slice 6 — Audio workspace
+
+- **The sidebar gained two commands the build order does not list: `Delete…` behind a confirmation, and `Reveal in Finder`.** §9.2's retention ring and pin flag were the only way anything left the store, which left no way to remove one recording on purpose. Both are in the row's context menu.
+- **The transport is a waveform of the whole recording, not a scrubber.** Click or drag anywhere on it seeks. Voice Memos is the system reference.
+- **Raw is the default transcript side, and clicking a word seeks only there** — `words` indexes raw, and cleanup rewrites that text without re-timing it. The `Cleaned` segment is visible and disabled with the reason in its tooltip until slice 11 writes `cleaned`.
+- **`Transcribe File…` is a disabled stub with a tooltip.** Slice 14 fills it; the button exists here so the empty state has somewhere to point.
+- **Pause markers come off for display** via `AudioHistory.unmark`, the inverse of `mark`. They stay in `entry.raw` on disk.
+- **The search field is applied to the sidebar column, not inside a mode's list.** `.searchable(placement: .sidebar)` renders at the top of the column wherever it is written, so the mode switches the binding rather than the field.
+- **`Recording.duration` is read from the CAF header, not stored.** Slice 5's `AudioEntry` schema is unchanged — a fourth slot would have to be backfilled into every existing entry to be trustworthy.
+- **Open, and not for a future session to settle quietly: the sidebar's column width.** No width is set anywhere, so `NavigationSplitView` collapses the column to ~140 pt, which truncates row titles to about three words. There is no system constant — `NSSplitViewController.minimumThicknessForInlineSidebars` returns the unset sentinel — so fixing it means an authored number, which is a tier-2 token. **Put it to Anthony.**
+
 ### Slice 9 — Overlay and chat · Slice 14 — File transcription
 
 - **Import transcription is serialised around active chat generation.** At 60× realtime an import costs cleanup **+76 %** latency and loses **24 %** of its own throughput. Slice 14 waits on a generating response rather than competing with it; slice 9 owns the signal it waits on. Neither applies to microphone dictation, which overlaps freely.
