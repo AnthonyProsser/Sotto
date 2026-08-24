@@ -270,6 +270,11 @@ nonisolated final class AudioCapture: @unchecked Sendable {
         smoothed = 0
         retained = []
         retainedFormat = nil
+        // Replacing a live continuation without finishing it strands whatever is
+        // reading the old stream, and `SpeechAnalyzer` reading it would then never
+        // see end-of-input. Nothing should reach here with one open; ending it is
+        // one line and removes the possibility.
+        self.continuation?.finish()
         let (stream, continuation) = AsyncStream<AnalyzerInput>.makeStream()
         self.continuation = continuation
 
@@ -287,6 +292,15 @@ nonisolated final class AudioCapture: @unchecked Sendable {
     }
 
     func stop() {
+        // **Ending the stream is unconditional; stopping the engine is not.**
+        // `finalizeAndFinishThroughEndOfInput()` returns only when the sequence
+        // handed to `analyzer.start` ends, and this is the only thing that ends
+        // it. Behind the `isRunning` guard, any caller arriving after the engine
+        // had already been stopped left the analyzer waiting on a stream nobody
+        // would ever finish — an unbounded `await` holding `pipeline`, which is
+        // the whole of the stuck-HUD state (2026-08-24).
+        continuation?.finish()
+        continuation = nil
         guard isRunning else { return }
         isRunning = false
         engine.stop()
@@ -295,8 +309,6 @@ nonisolated final class AudioCapture: @unchecked Sendable {
         // stop path, which is off the latency path entirely.
         engine.prepare()
         converter = nil
-        continuation?.finish()
-        continuation = nil
     }
 
     /// Move the retained PCM out. Slice 5 encodes it; abort discards it.

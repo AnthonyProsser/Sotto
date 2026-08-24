@@ -74,6 +74,7 @@ final class HUDPanel {
     }
     private var host: NSHostingView<HUDView>?
     private var dismissal: DispatchWorkItem?
+    private var warmupTeardown: DispatchWorkItem?
 
     private init() {}
 
@@ -91,6 +92,7 @@ final class HUDPanel {
     /// orders the panel back out having never been visible.
     func prepare(_ state: HUDState) {
         dismissal?.cancel()
+        warmupTeardown?.cancel()
         if panel?.isVisible != true { appearance = Self.appearanceNow() }
         self.state = state
         let panel = self.panel ?? make()
@@ -102,6 +104,7 @@ final class HUDPanel {
 
     func show(_ state: HUDState) {
         dismissal?.cancel()
+        warmupTeardown?.cancel()
         if panel?.isVisible != true { appearance = Self.appearanceNow() }
         self.state = state
         running = true
@@ -128,11 +131,19 @@ final class HUDPanel {
         panel.orderFrontRegardless()
         // Three frames at 60 Hz — enough for the first composite to happen before
         // the panel goes away again.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self, weak panel] in
+        //
+        // **Held so a gesture landing inside the window can cancel it.** Arming
+        // fires on every Right Cmd press, so a press about half a second after
+        // launch reaches `prepare(_:)` while this is still pending, and an
+        // uncancellable teardown ordered the panel out from under a live
+        // dictation. It also no longer clears `running`: `warm()` never sets it,
+        // so the only value it could ever have cleared was a gesture's.
+        let teardown = DispatchWorkItem { [weak panel] in
             panel?.orderOut(nil)
             panel?.alphaValue = 1
-            self?.running = false
         }
+        warmupTeardown = teardown
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05, execute: teardown)
     }
 
     /// **The seam, and the part that is not finished.** Anthony asked for the
@@ -172,6 +183,8 @@ final class HUDPanel {
     func hide() {
         dismissal?.cancel()
         dismissal = nil
+        warmupTeardown?.cancel()
+        warmupTeardown = nil
         panel?.orderOut(nil)
         running = false
     }
