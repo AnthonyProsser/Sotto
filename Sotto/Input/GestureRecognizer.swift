@@ -10,6 +10,13 @@ import Foundation
 /// Everything slice 2 produces. Each is a log line today: slice 3 gives the first
 /// four bodies and slice 9 gives `overlay` one.
 enum GestureSignal: String {
+    /// Right Cmd went down and nothing is classified yet. Slice 3 opens the
+    /// microphone speculatively on this, so that a hold that becomes a dictation
+    /// already has the lead-in audio the user spoke over the 250 ms threshold.
+    /// **It is not a recording** — `disarm` throws the audio away.
+    case arm = "ARM"
+    /// The armed window ended without becoming a dictation.
+    case disarm = "DISARM"
     case pushToTalk = "PUSH_TO_TALK"
     case latched = "LATCHED"
     case stop = "STOP"
@@ -104,6 +111,7 @@ final class GestureRecognizer {
         switch state {
         case .idle:
             state = .armed
+            emit(.arm)
             expire(after: Self.holdThreshold) { [self] in
                 state = .pushToTalk
                 emit(.pushToTalk)
@@ -126,6 +134,12 @@ final class GestureRecognizer {
         switch state {
         case .armed:
             state = .awaitingSecond
+            // **Released under the threshold, so the microphone closes now rather
+            // than at the end of the second-tap window** (Anthony, 2026-08-24).
+            // Nobody speaks during a double-tap, so there is no audio in that
+            // window worth keeping, and stopping here halves the worst case a
+            // press that never becomes a dictation can hold the device open.
+            emit(.disarm)
             expire(after: Self.secondTapWindow) { [self] in
                 state = .idle // Window closed with no second tap: discard, say nothing.
             }

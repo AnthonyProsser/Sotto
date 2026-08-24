@@ -103,6 +103,15 @@ struct MainWindowView: View {
     var body: some View {
         NavigationSplitView(columnVisibility: $state.columns) {
             sidebar
+                // Unset, `NavigationSplitView` collapses this column to ~140 pt,
+                // which truncates the search field's own placeholder — "Search
+                // Recordings" is 114 pt of text before the magnifier, the clear
+                // button, and the field's insets. There is no system metric for a
+                // sidebar width (`rules/design.md` §1), so this is the ordinary
+                // layout dimension that rule sends to a local constant: the ideal
+                // is the placeholder plus that chrome, the minimum is where it
+                // starts to truncate, and the user can still drag it.
+                .navigationSplitViewColumnWidth(min: 200, ideal: 230, max: 400)
         } detail: {
             detail
         }

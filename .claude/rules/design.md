@@ -52,6 +52,7 @@ This file combines general macOS practice and Sotto-specific rules. Keep one fil
 | Ignoring settings | authored colors/material/motion | semantic APIs handle Dark Mode, accent, contrast, transparency; preserve information in Reduce Motion (waveform: 8 Hz, not off) |
 | English-sized frame | fixed width/height for one string | size to content; constrain ratios; document any fixed size and tested condition |
 | Calling structure appearance | frame dump reported as visual confirmation | screenshot for appearance; report structural and visual verification separately |
+| Animation running off screen | `TimelineView(.animation)` or a display link inside a panel that is ordered out | `.animation(paused:)` driven by a visibility flag. **An ordered-out `NSPanel` does not stop its host's display link** — measured 2026-08-24, the HUD's waveform held the process at ~6 % CPU with no gesture ever fired |
 
 The identifier version of the first failure is especially costly: a name that fails to compile proves only that *name* is wrong. Check SDK headers before minting a replacement. `.sidebarTrackingSeparator` exists; `.trackingSeparator` does not (§7).
 

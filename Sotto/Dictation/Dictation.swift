@@ -35,6 +35,12 @@ final class Dictation {
     /// Live between `start()` and the end of the pipeline it kicks off.
     private var pipeline: Task<Void, Never>?
 
+    /// The capture stream opened speculatively on key-down, held until the gesture
+    /// says what it was. **Nothing reads it while it sits here** — `AsyncStream` is
+    /// unbounded, so the buffers queue and the whole armed window flows into the
+    /// transcriber the moment `start()` hands the stream over.
+    private var armed: AsyncStream<AnalyzerInput>?
+
     /// §4.9's routing input, read at the moment the user starts speaking rather
     /// than when they stop: clicking elsewhere to place a cursor deselects, so a
     /// selection read at the end would be a different question.
@@ -52,29 +58,88 @@ final class Dictation {
             await Transcription.shared.prepare()
             audioFormat = await Transcription.shared.audioFormat()
         }
+
+        // **First-touch costs, moved off the first gesture.** Each of these is
+        // paid once per launch wherever it happens; measured cold they were
+        // ~107 ms of window creation, ~241 ms of first render, ~43 ms of first
+        // contact with the cleanup model, and ~309 ms of reaching CoreAudio and
+        // bringing the input node up — together most of the cold path.
+        //
+        // **On the main actor, half a second in, not on a background queue.**
+        // `start()` runs here too, and `AVAudioEngine`'s graph is not safe to
+        // mutate from two threads at once; a gesture landing mid-warm-up queues
+        // behind it and pays a cost it was going to pay anyway. The delay is so
+        // the status item and the tap are up first.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            HUDPanel.shared.warm()
+            Cleanup.shared.prewarm()
+            AudioCapture.shared.warm()
+        }
     }
 
-    // MARK: - The gesture's four signals
+    // MARK: - The gesture's signals
+
+    /// **Right Cmd went down and nothing is classified yet.** The microphone opens
+    /// here and the HUD is composited transparent, so that the ~55 ms of CoreAudio
+    /// bring-up and the ~100 ms of buffer fill happen *inside* the 250 ms the user
+    /// spends holding the key rather than after it. A hold that becomes a dictation
+    /// therefore arrives with the lead-in already captured — the words a fast
+    /// speaker used to lose.
+    ///
+    /// **The transcriber is not touched.** A `SpeechTranscriber` module belongs to
+    /// one `SpeechAnalyzer` for its lifetime and building one costs real work; a
+    /// speculative analyzer on every Right Cmd press is not a trade worth making.
+    /// The stream is held instead, and handed over at `start()`.
+    ///
+    /// **It cannot raise the microphone prompt.** §2.4 asks at first use of the
+    /// feature, and an unclassified key-down is not that — a bare Right Cmd would
+    /// otherwise put the TCC dialog on screen, and `engine.start()` blocks its
+    /// caller until that dialog is answered. Unauthorized, this does nothing and
+    /// the real gesture asks, exactly as before.
+    func arm() {
+        guard pipeline == nil, armed == nil, AudioCapture.isAuthorized else { return }
+        HUDPanel.shared.prepare(.recording(level: 0))
+        do {
+            armed = try AudioCapture.shared.start(analyzerFormat: audioFormat)
+        } catch {
+            // Silent on purpose. Nothing has been classified, so there is nothing
+            // to report yet; `start()` opens the microphone itself and surfaces the
+            // failure there if the gesture turns out to be real.
+            armed = nil
+            HUDPanel.shared.hide()
+        }
+    }
 
     func start() {
         guard pipeline == nil else { return }
 
         Activity.shared.set(.recording, true)
+        // Already on screen and composited if the armed window ran; this is the
+        // alpha change and nothing else.
         HUDPanel.shared.show(.recording(level: 0))
         // The seam. Slice 11 fills it; firing it here costs nothing and saves the
         // first dictation of every session ~3.5 s.
         Cleanup.shared.prewarm()
 
         let stream: AsyncStream<AnalyzerInput>
-        do {
-            stream = try AudioCapture.shared.start(analyzerFormat: audioFormat)
-        } catch {
-            log.error("Capture failed: \(error.localizedDescription, privacy: .public)")
-            // A `nil` message is the permission-prompt case: the question is on
-            // screen, and a HUD error behind it would be Sotto complaining about
-            // something the user is in the middle of answering.
-            finish(with: Self.message(for: error).map(HUDState.error))
-            return
+        if let armed {
+            // The hold path. Capture has been running since key-down and the
+            // buffered prefix is still in the stream.
+            stream = armed
+            self.armed = nil
+        } else {
+            // The latch path, and the first-run permission path. The second tap
+            // closed the microphone under Anthony's ruling, so it opens here.
+            do {
+                stream = try AudioCapture.shared.start(analyzerFormat: audioFormat)
+            } catch {
+                log.error("Capture failed: \(error.localizedDescription, privacy: .public)")
+                // A `nil` message is the permission-prompt case: the question is on
+                // screen, and a HUD error behind it would be Sotto complaining about
+                // something the user is in the middle of answering.
+                finish(with: Self.message(for: error).map(HUDState.error))
+                return
+            }
         }
 
         // Read after capture is running, not before it: the Cmd+C fallback in
@@ -133,11 +198,17 @@ final class Dictation {
         }
     }
 
-    /// Escape priority 1, or a chord that revealed the gesture was Cmd+something
-    /// (§4.1). Discard the audio and insert nothing — the HUD fades with no
-    /// message, because an abort is not news.
+    /// Escape priority 1, a chord that revealed the gesture was Cmd+something
+    /// (§4.1), or the release that ended an armed window without classifying it.
+    /// Discard the audio and insert nothing — the HUD fades with no message,
+    /// because an abort is not news.
+    ///
+    /// **One discard path, and this is it.** `disarm` routes here rather than
+    /// growing a second one; the difference between the two cases is only which of
+    /// `pipeline` and `armed` was live, and `cancelPipeline` already handles both.
     func abort() {
-        guard pipeline != nil else { return }
+        guard pipeline != nil || armed != nil else { return }
+        armed = nil
         cancelPipeline()
         finish(with: nil)
     }
@@ -209,6 +280,7 @@ final class Dictation {
     /// what the user sees.
     private func finish(with state: HUDState?) {
         pipeline = nil
+        armed = nil
         selection = nil
         Activity.shared.set(.recording, false)
 

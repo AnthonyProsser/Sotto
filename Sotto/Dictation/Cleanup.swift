@@ -46,14 +46,13 @@ final class Cleanup {
 
     private init() {}
 
-    /// Fired when a dictation gesture produces a recording.
+    /// Fired from `Dictation.prepare()` half a second after launch, alongside the
+    /// HUD and audio warm-ups (`DECISIONS.md`, 2026-08-23).
     ///
-    /// **Not quite "when the gesture arms."** The seam wants the key-down, 250 ms
-    /// before the hold threshold; `GestureSignal` has no `armed` case and slice
-    /// 2's state machine is closed, so the earliest signal available is the one
-    /// that starts recording. That is still whole seconds ahead of the pass, and
-    /// moving it earlier is a one-line change in `EventTap.route` if slice 11
-    /// finds the 250 ms matters.
+    /// **Earlier than the seam originally asked for.** It fired from the gesture
+    /// until 2026-08-23, when measurement put first contact with the model at
+    /// ~43 ms on the cold path — small beside the audio costs beside it, but paid
+    /// for nothing, since nothing about it needs the gesture to have happened.
     ///
     /// **Unavailable is not a failure and never reaches the HUD** (`DECISIONS.md`,
     /// 2026-08-19). `availability` is a configuration state, knowable before the

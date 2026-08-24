@@ -43,6 +43,24 @@ Bounds: one machine, no `sudo`, so this is ANE occupancy and latency rather than
 
 **A recording that ends under 15 s is always transcribed whole (§4.2)** — Parakeet path only.
 
+## 1.2 Capture — the armed window, the persistent tap, and the buffer that is not a knob
+
+**All three measured 2026-08-24; the reasoning is in `DECISIONS.md`, and only what a future session needs to not undo is here.**
+
+**The microphone opens on the Right Cmd key-down, before the gesture is classified.** `Dictation.arm()` starts capture and puts the HUD on screen at zero alpha inside the 250 ms the user is holding the key anyway; `start()` then adopts the already-running stream. **The transcriber is never touched on key-down** — a module belongs to one analyzer for its lifetime (§1.0), so building one speculatively would burn it on a press that turns out to be a chord.
+
+**There is one discard path and it is `Dictation.abort()`.** A release under the threshold, a chord, an Escape, and the second-tap window expiring all route to it. Do not add a second one; the only difference between the cases is which of `pipeline` and `armed` was live.
+
+**`arm()` is guarded on the microphone grant Sotto already holds, and that guard is not optional.** `engine.start()` blocks its caller until the TCC dialog is answered — 45 s, measured — so an unguarded speculative start would hang the tap thread's callee on a bare Right Cmd at first run. Unauthorized, arming does nothing and the real gesture asks at first use, exactly as §2.4 requires.
+
+**The capture tap is installed once per device, not once per recording**, and `engine.prepare()` runs after `engine.stop()` rather than before `engine.start()`. Reinstall on a device or format change only — §4.8's rule that a device change must not drop an in-flight recording is what that guard protects.
+
+**`installTap`'s `bufferSize` is ignored.** 4096, 1024, 512 and 256 all deliver 4800-frame buffers — 100 ms at 48 kHz — above a device IO buffer of 512. **Do not tune it.** Time-to-first-audio cannot fall below `engine.start()` plus one 100 ms buffer without capturing from an `AudioUnit` directly instead of `AVAudioEngine`, which is a rewrite of the capture layer.
+
+**What remains is hardware.** `engine.start()` is ~55 ms warm and ~160 ms cold after every in-process cost around it was removed. That is CoreAudio bringing the device up; there is no further lever, and the armed window is what takes it off the path the user can feel.
+
+---
+
 ## 2. Timings and seeking
 
 **On the Apple path, timings come from the `.audioTimeRange` attribute on the result's `AttributedString` runs** — per word, ~60 ms, start and end. `buildWordTimings(from:)` was FluidAudio's and is gone with it. **The `startTime`-only rule survives on its pre-roll argument** (below); the FluidAudio #381 reason for it does not apply here.
@@ -67,7 +85,7 @@ The HUD reports through the idle / not-idle signal, one of the four cross-slice 
 
 **Cleanup defaults to Apple's on-device model** — `SystemLanguageModel`, `FoundationModels` — so Sotto punctuates dictation at first run with nothing downloaded (2026-08-19, `DECISIONS.md`). It stays per-profile per §4.6; this is a default, not a lock. Use `Guardrails.permissiveContentTransformations`, **not** the default set: the default guardrails refuse on the user's own dictated content, and an app that declines to punctuate what someone just said because it contained profanity or a medical term is not a dictation app.
 
-**Prewarm when the gesture arms, not when cleanup starts.** Measured on the reference machine: the first request after launch costs ~3.5 s, every request after it ~850 ms. Un-prewarmed, the first dictation of each session pays that 3.5 s in the gap between speaking and seeing text. `LanguageModelSession.prewarm(promptPrefix:)` is the hook, and **slice 3 leaves the seam even though slice 11 fills it** — the gesture is slice 2/3 and cleanup is slice 11, so without it slice 11 reaches back into gesture handling.
+**Prewarm at launch, not when the gesture arms and not when cleanup starts** (2026-08-23, `DECISIONS.md`; it armed the gesture until then). Measured on the reference machine: the first request after launch costs ~3.5 s, every request after it ~850 ms. Un-prewarmed, the first dictation of each session pays that 3.5 s in the gap between speaking and seeing text. `LanguageModelSession.prewarm(promptPrefix:)` is the hook, fired from `Dictation.prepare()` alongside the HUD and audio warm-ups, and **slice 3 leaves the seam even though slice 11 fills it** — the gesture is slice 2/3 and cleanup is slice 11, so without it slice 11 reaches back into gesture handling.
 
 **Prewarming is never `Activity.Contributor.cleanup`.** The icon reports that Sotto is awake (§14.8); a speculative warm-up the user did not ask for is not that. Set the contributor when a pass actually runs.
 

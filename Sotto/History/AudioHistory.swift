@@ -19,7 +19,9 @@ import os
 /// `rules/slices.md` §5.
 nonisolated enum AudioHistory {
 
-    static let defaultRingLimit = 8
+    /// **Ten, not spec §9.2's eight** (2026-08-23, `DECISIONS.md`). Configurable
+    /// either way, and 0 is still "never delete."
+    static let defaultRingLimit = 10
     static let enabledKey = "AudioHistoryEnabled"
     static let ringLimitKey = "AudioHistoryRingLimit"
 
