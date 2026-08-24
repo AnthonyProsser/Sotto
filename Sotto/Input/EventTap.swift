@@ -85,6 +85,12 @@ final class EventTap {
     @MainActor
     private static func route(_ signal: GestureSignal) {
         switch signal {
+        case .arm:
+            Dictation.shared.arm()
+        case .disarm:
+            // The same stop-and-discard `abort` performs. There is one discard
+            // path and this is it.
+            Dictation.shared.abort()
         case .pushToTalk, .latched:
             Dictation.shared.start()
         case .stop:

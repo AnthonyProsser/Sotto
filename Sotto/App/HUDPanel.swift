@@ -45,26 +45,94 @@ final class HUDPanel {
     private static let canvas = NSSize(width: 480, height: 80)
 
     private var panel: NSPanel?
+
+    /// **Guarded on inequality, and that is not a micro-optimisation of the level
+    /// path** — every level update carries a genuinely new value, so the guard
+    /// never fires there. What it catches is the redundant re-assignment: the
+    /// reveal at recognition repeats the state the armed window already set, and
+    /// `stop()` repeats it again. Each of those would otherwise re-evaluate the
+    /// whole body, glass container included, for no change.
     private var state: HUDState = .recording(level: 0) {
-        didSet { host?.rootView = HUDView(state: state, appearance: appearance) }
+        didSet { if state != oldValue { render() } }
     }
 
     /// Chosen when the HUD appears and not revisited until it has gone away —
     /// a state morph part-way through a showing must not re-pin it, or the
     /// "Copied to clipboard" step becomes the flip the pin exists to prevent.
-    private var appearance: ColorScheme = .light
+    ///
+    /// It renders on its own rather than leaning on the state write above: a
+    /// showing that re-pins the appearance without changing the state would
+    /// otherwise keep the old one, which is the bug the equality guard would
+    /// introduce if this were left to `state`'s `didSet`.
+    private var appearance: ColorScheme = .light {
+        didSet { if appearance != oldValue { render() } }
+    }
+    /// Drives the waveform's display link, and is the reason `hide()` is not just
+    /// an `orderOut`. False while the panel is off screen; see `HUDView.running`.
+    private var running = false {
+        didSet { if running != oldValue { render() } }
+    }
     private var host: NSHostingView<HUDView>?
     private var dismissal: DispatchWorkItem?
 
     private init() {}
 
+    private func render() { host?.rootView = HUDView(state: state, appearance: appearance, running: running) }
+
     // MARK: - Showing
+
+    /// **The armed window's half of the show.** Right Cmd is down and nothing is
+    /// classified yet, so the surface is put on screen fully transparent: the
+    /// window server composites it, the glass rasterises, and the waveform starts
+    /// tracking the level — all of it inside the 250 ms the user is holding the
+    /// key anyway. `show(_:)` at recognition then has one alpha change left.
+    ///
+    /// It draws nothing. A press that turns out to be a chord or half a double-tap
+    /// orders the panel back out having never been visible.
+    func prepare(_ state: HUDState) {
+        dismissal?.cancel()
+        if panel?.isVisible != true { appearance = Self.appearanceNow() }
+        self.state = state
+        let panel = self.panel ?? make()
+        running = true
+        panel.alphaValue = 0
+        position(panel)
+        panel.orderFrontRegardless()
+    }
 
     func show(_ state: HUDState) {
         dismissal?.cancel()
         if panel?.isVisible != true { appearance = Self.appearanceNow() }
         self.state = state
+        running = true
         panel(orderingFront: true)
+    }
+
+    /// Build the panel and render it once at launch, so the first gesture pays
+    /// for neither. Measured cold, those are the two largest costs on the path to
+    /// the HUD appearing: ~107 ms to create the window and start the UI framework,
+    /// and ~241 ms for the first render, which is mostly rasterising the glass.
+    ///
+    /// **Rendered at zero alpha rather than off-screen.** A window placed outside
+    /// the display's bounds may never be composited at all, which would warm
+    /// nothing; a transparent one on the screen it will really appear on takes the
+    /// same path the first gesture does. **Measured 2026-08-24 and it does hold:**
+    /// the first order-in costs 141–375 ms, and every order-in after it costs one
+    /// display refresh — 8.8 ms, 16.5 ms — with no penalty for the first one having
+    /// been transparent. That is what `prepare(_:)` above relies on.
+    func warm() {
+        guard panel == nil else { return }
+        let panel = panel(orderingFront: false)
+        panel.alphaValue = 0
+        position(panel)
+        panel.orderFrontRegardless()
+        // Three frames at 60 Hz — enough for the first composite to happen before
+        // the panel goes away again.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self, weak panel] in
+            panel?.orderOut(nil)
+            panel?.alphaValue = 1
+            self?.running = false
+        }
     }
 
     /// **The seam, and the part that is not finished.** Anthony asked for the
@@ -105,6 +173,7 @@ final class HUDPanel {
         dismissal?.cancel()
         dismissal = nil
         panel?.orderOut(nil)
+        running = false
     }
 
     // MARK: - The panel
@@ -113,6 +182,9 @@ final class HUDPanel {
     private func panel(orderingFront: Bool) -> NSPanel {
         let panel = self.panel ?? make()
         if orderingFront {
+            // Undoes `prepare(_:)`, and is the whole of the reveal when the armed
+            // window already put the surface on screen.
+            panel.alphaValue = 1
             position(panel)
             // Not `makeKeyAndOrderFront`: the HUD appears while the user is typing
             // into another app, and taking key would move focus out from under
@@ -147,7 +219,7 @@ final class HUDPanel {
         // first-class case, so neither is optional.
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
 
-        let host = NSHostingView(rootView: HUDView(state: state, appearance: appearance))
+        let host = NSHostingView(rootView: HUDView(state: state, appearance: appearance, running: running))
         host.frame = NSRect(origin: .zero, size: Self.canvas)
         host.autoresizingMask = [.width, .height]
         panel.contentView = host

@@ -23,6 +23,35 @@ struct AudioSidebar: View {
     @State private var pendingDelete: AudioLibrary.Recording?
 
     var body: some View {
+        VStack(spacing: 0) {
+            transcribeFile
+            list
+        }
+    }
+
+    /// **The sidebar's action, not the detail pane's** (2026-08-23,
+    /// `DECISIONS.md`). Spec §10.2 lists `Transcribe File…` among the Audio
+    /// mode's *detail* controls, which put it beside the pin on whichever
+    /// recording happened to be selected — an import starts a new entry rather
+    /// than doing anything to that one. It takes the slot slice 10's New Chat
+    /// will take on the other mode, which is the action it is the twin of.
+    ///
+    /// Slice 14 builds it; until then §14.7's first pattern, the system disabled
+    /// state with the reason in the tooltip.
+    private var transcribeFile: some View {
+        Button {} label: {
+            Label("Transcribe File…", systemImage: "waveform.badge.plus")
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .disabled(true)
+        .help("File transcription arrives in a later build.")
+        .padding(.horizontal)
+        .padding(.bottom, 8)
+    }
+
+    private var list: some View {
         List(library.visible, selection: $library.selection) { recording in
             RecordingRow(recording: recording)
                 .tag(recording.id)
@@ -149,8 +178,6 @@ struct AudioDetail: View {
                     Label("No Recording Selected", systemImage: "waveform")
                 } description: {
                     Text("Choose a recording to play it and read its transcript.")
-                } actions: {
-                    transcribeFile
                 }
             }
         }
@@ -163,21 +190,6 @@ struct AudioDetail: View {
             }
         }
         .onDisappear { playback.stop() }
-    }
-
-    /// §10.2 puts **Transcribe File…** in this pane rather than the menu bar — it
-    /// is a workspace action, not a quick switch. Slice 14 builds it; until then it
-    /// takes §14.7's first pattern, the system disabled state with the reason in
-    /// the tooltip, which is the same shape the menu-bar stubs already use.
-    ///
-    /// **It sits in the header row, or in the empty state's action slot — never
-    /// both**, because those two are mutually exclusive. It had a bar of its own
-    /// first and that bar was 160 pt of nothing with one disabled button pinned to
-    /// the far corner: an action with no context reads as chrome.
-    private var transcribeFile: some View {
-        Button("Transcribe File…") {}
-            .disabled(true)
-            .help("File transcription arrives in a later build.")
     }
 
     private func content(_ recording: AudioLibrary.Recording) -> some View {
@@ -201,10 +213,10 @@ struct AudioDetail: View {
         }
     }
 
-    /// The pin and **Transcribe File…** are layout siblings, not an overlay. An
-    /// overlay reserves no width, so a long title drew straight under both of them
-    /// as soon as the sidebar was widened (measured 2026-08-20). As siblings the
-    /// title truncates at two lines instead, which is what `lineLimit(2)` is for.
+    /// The pin is a layout sibling of the title, not an overlay. An overlay
+    /// reserves no width, so a long title drew straight under it as soon as the
+    /// sidebar was widened (measured 2026-08-20). As siblings the title truncates
+    /// at two lines instead, which is what `lineLimit(2)` is for.
     private func header(_ recording: AudioLibrary.Recording) -> some View {
         HStack(alignment: .top) {
             VStack(alignment: .leading) {
@@ -231,8 +243,6 @@ struct AudioDetail: View {
             .foregroundStyle(recording.pinned ? AnyShapeStyle(Token.Accent.primary) : AnyShapeStyle(.secondary))
             .help(recording.pinned ? "Unpin — the ring may evict this" : "Pin — never evicted by the ring")
             .accessibilityLabel(recording.pinned ? "Unpin recording" : "Pin recording")
-
-            transcribeFile
         }
         .padding([.horizontal, .top])
         .padding(.bottom, 8)

@@ -51,6 +51,14 @@ struct HUDView: View {
     /// open. `HUDPanel` owns the choice; this type only obeys it.
     let appearance: ColorScheme
 
+    /// **False whenever the panel is not on screen.** An ordered-out `NSPanel`
+    /// hosting this view keeps its display link running — sampled 2026-08-24 with
+    /// no gesture ever fired, `Waveform.body` was 151 of 2242 main-thread samples
+    /// and the process sat at ~6 % CPU at rest. `Waveform`'s own note assumed
+    /// occlusion stopped it; it does not, and `warm()` plus the armed window mean
+    /// the panel spends nearly all of its life ordered out.
+    let running: Bool
+
     /// Height is the one fixed dimension: the HUD is a single line of content and
     /// a line does not grow. Everything else derives from it.
     static let height: CGFloat = 36
@@ -119,7 +127,7 @@ struct HUDView: View {
     private var content: some View {
         switch state {
         case .recording(let level):
-            Waveform(level: level)
+            Waveform(level: level, running: running)
         case .message(let text):
             Text(text)
                 // `.callout` is 12 pt. The 13 pt in `sotto-tokens.md` was never
@@ -146,6 +154,7 @@ struct HUDView: View {
 /// idle state is a row of dots rather than an absence.
 struct Waveform: View {
     let level: Double
+    let running: Bool
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -157,9 +166,11 @@ struct Waveform: View {
     }
 
     var body: some View {
-        // `.animation` drives a redraw per frame off the display link. A `Timer`
-        // would work and would keep running while the HUD is occluded.
-        TimelineView(.animation) { timeline in
+        // `.animation` drives a redraw per frame off the display link, and
+        // `paused:` is what stops it — the link does *not* stop on its own when
+        // the panel is ordered out (`HUDView.running`). A `Timer` would keep
+        // running there too, and with no equivalent switch.
+        TimelineView(.animation(paused: !running)) { timeline in
             let t = time(timeline.date)
             HStack(spacing: Token.Authored.Waveform.barGap) {
                 ForEach(0..<Token.Authored.Waveform.count, id: \.self) { i in

@@ -36,7 +36,7 @@ Five things are built in pieces and go wrong if each slice treats them as local.
 
 **Error routing (§14.3).** No central error type, no central vocabulary. Each failure names its own surface at the point it is thrown. Surfaces are designed in the slice that owns them — slice **6** designs the file-transcription failure slot even though nothing produces one until slice **14**. Full table in `.claude/rules/design.md` §10.
 
-**The cleanup model's warm-up.** The hook is set in **slice 3**, fired from the gesture in **slice 2/3**, and consumed by **slice 11**. Apple's on-device model costs ~3.5 s on the first request after launch and ~850 ms after that (measured 2026-08-19), so an un-prewarmed cleanup puts 3.5 s into the gap between speaking and seeing text on the first dictation of every session. **Slice 3 leaves the seam even though nothing fills it yet** — otherwise slice 11 reaches back into gesture handling to add one. Prewarming is never an `Activity` contributor; full rule in `.claude/rules/audio-and-transcription.md` §3.1.
+**The cleanup model's warm-up.** The hook is set in **slice 3**, fired **at launch** from `Dictation.prepare()` (2026-08-23; it fired from the gesture until then), and consumed by **slice 11**. Apple's on-device model costs ~3.5 s on the first request after launch and ~850 ms after that (measured 2026-08-19), so an un-prewarmed cleanup puts 3.5 s into the gap between speaking and seeing text on the first dictation of every session. **Slice 3 leaves the seam even though nothing fills it yet** — otherwise slice 11 reaches back into gesture handling to add one. Prewarming is never an `Activity` contributor; full rule in `.claude/rules/audio-and-transcription.md` §3.1.
 
 **The token sheet's growth (§14.2).** One row at a time, each a four-part claim. Starts empty in slice **1** with whatever the menu and settings window actually consume. Three tier-2 entries are pre-approved — waveform idle bar (slice **3**), the scrim pair (slice **13**), overlay intrusiveness (slice **9**). Full rule in `.claude/rules/design.md` §9.
 
@@ -67,7 +67,8 @@ Do not build past one of these without asking — `.claude/rules/open-questions.
 ### Slice 3 — Dictation core
 
 - **Design item 5, the error morph:** design it with **no model-unavailable string**. A cleanup model that is not available routes to Settings → Dictation, not to the HUD. See `rules/design.md` §10.
-- **Build list, one addition:** leave the **prewarm seam** for the cleanup model — fired when the gesture arms, filled in slice 11. §3's fifth cross-slice thread.
+- **Build list, one addition:** leave the **prewarm seam** for the cleanup model — **fired at launch from `Dictation.prepare()`** (2026-08-23; it fired from the gesture until then), filled in slice 11. §3's fifth cross-slice thread.
+- **The microphone opens on the Right Cmd key-down, not at the 250 ms threshold** (`DECISIONS.md`, 2026-08-24). `Dictation.arm()` starts capture and pre-renders the HUD at zero alpha; every way the press can fail to become a dictation routes to the **existing** `abort()`. Do not write a second discard path, and do not touch the transcriber on key-down.
 
 ### Slice 4 — Transcription pipeline
 

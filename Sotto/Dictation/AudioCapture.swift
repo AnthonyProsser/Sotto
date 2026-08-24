@@ -39,6 +39,13 @@ nonisolated final class AudioCapture: @unchecked Sendable {
     private var converter: AVAudioConverter?
     private var isRunning = false
 
+    /// The device and device format the installed tap was built against.
+    /// **Install once per device, not once ever** — pinning a different device
+    /// changes the input node's format, and a tap left on the old one fails at
+    /// `engine.start()` rather than at the mismatch.
+    private var tapDevice: AudioDeviceID?
+    private var tapFormat: AVAudioFormat?
+
     /// Copies of the converted buffers, kept until `takeRecording()` or
     /// `discardRecording()`. The tap's own buffer is reused by the engine, so
     /// retaining it without a copy would alias later frames.
@@ -50,6 +57,21 @@ nonisolated final class AudioCapture: @unchecked Sendable {
     /// buffers reads as a voice rather than as a strobe. Fast attack because a
     /// waveform that lags the first word is the one thing the HUD must not do.
     private var smoothed: Double = 0
+
+    /// **The engine ignores this, and the number is kept only because something
+    /// has to be passed.** Measured 2026-08-24: 4096, 1024, 512 and 256 all
+    /// deliver 4800-frame buffers — 100 ms at 48 kHz — and the device's own IO
+    /// buffer is 512 frames, so the 4800 is `AVAudioEngine`'s tap buffering rather
+    /// than the hardware's. The 100 ms it costs between the microphone going live
+    /// and the first sample in hand is not reachable from here; it would take
+    /// capturing from an `AudioUnit` directly instead of from `AVAudioEngine`.
+    ///
+    /// The earlier reasoning here — that 4096 kept the level meter off "a single
+    /// syllable's worth of samples" — is deleted rather than corrected. It argued
+    /// for a number that turns out not to be honoured, and it had the direction
+    /// wrong anyway: 100 ms *is* most of a syllable, and it is the envelope
+    /// follower below that stops the bars strobing.
+    static let requestedBufferFrames: AVAudioFrameCount = 4096
 
     private init() {}
 
@@ -181,6 +203,13 @@ nonisolated final class AudioCapture: @unchecked Sendable {
         }
     }
 
+    /// Whether the grant is already held. **Never asks** — the two callers that
+    /// use it (`warm()`, and the armed window in `Dictation.arm()`) are both
+    /// speculative, and §2.4 asks at first use of the feature.
+    static var isAuthorized: Bool {
+        AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
+    }
+
     /// **`engine.start()` blocks its caller until the TCC prompt is answered** —
     /// measured at 45 s on the first run of this build, and the caller is the main
     /// actor, so the menu bar and the HUD freeze with it. §2.4 still asks at first
@@ -199,6 +228,24 @@ nonisolated final class AudioCapture: @unchecked Sendable {
         }
     }
 
+    /// Resolve the input device and instantiate the input node at launch.
+    ///
+    /// **This does not open the microphone.** No IO is started, so the system
+    /// records no use of the device and draws no indicator; only `engine.start()`
+    /// does that. What it buys is the two first-touch costs measured cold —
+    /// ~50 ms to reach CoreAudio for the default device and ~259 ms to bring the
+    /// input node up — both of which the first gesture pays today.
+    ///
+    /// **Guarded on the grant Sotto already has**, never on one it could ask for:
+    /// §2.4 asks at first use of the feature, so a first run warms nothing and the
+    /// first gesture still raises the prompt. Every launch after that is warm.
+    func warm() {
+        guard Self.isAuthorized else { return }
+        // `arm()` re-resolves and re-pins at the next gesture; this is the same
+        // call made early, not a substitute for it.
+        _ = try? arm()
+    }
+
     /// Start the engine and hand back the buffers. The stream finishes when
     /// `stop()` is called, which is what `Transcription.finish()` waits on.
     ///
@@ -206,16 +253,8 @@ nonisolated final class AudioCapture: @unchecked Sendable {
     /// no preference and the device's own format goes through untouched.
     func start(analyzerFormat: AVAudioFormat?) throws -> AsyncStream<AnalyzerInput> {
         try checkPermission()
-        guard let device = selectedDevice?.id ?? Self.defaultInputDevice() else {
-            throw Failure.noInputDevice
-        }
-        // Written before the format is read: changing the current device changes
-        // the input node's format, and a tap installed against the old one fails
-        // at `engine.start()` rather than at the mismatch.
-        try pin(device)
-
-        let input = engine.inputNode
-        let captureFormat = input.outputFormat(forBus: 0)
+        let device = try arm()
+        let captureFormat = tapFormat ?? engine.inputNode.outputFormat(forBus: 0)
         if let analyzerFormat, analyzerFormat != captureFormat {
             guard let converter = AVAudioConverter(from: captureFormat, to: analyzerFormat) else {
                 throw Failure.unconvertibleFormat
@@ -234,30 +273,15 @@ nonisolated final class AudioCapture: @unchecked Sendable {
         let (stream, continuation) = AsyncStream<AnalyzerInput>.makeStream()
         self.continuation = continuation
 
-        // 4096 frames ≈ 85 ms at 48 kHz: enough that the level meter is not
-        // reading a single syllable's worth of samples, short enough that the
-        // waveform still moves with the voice.
-        input.installTap(onBus: 0, bufferSize: 4096, format: captureFormat) { [weak self] buffer, _ in
-            guard let self else { return }
-            let level = Self.level(of: buffer)
-            smoothed = level > smoothed ? level : smoothed * 0.6 + level * 0.4
-            onLevel?(smoothed)
-            guard let converted = convert(buffer) else { return }
-            if retainedFormat == nil { retainedFormat = converted.format }
-            if let copy = Self.copy(converted) { retained.append(copy) }
-            continuation.yield(AnalyzerInput(buffer: converted))
-        }
-
-        engine.prepare()
+        isRunning = true
         do {
             try engine.start()
         } catch {
-            input.removeTap(onBus: 0)
+            isRunning = false
             continuation.finish()
             self.continuation = nil
             throw error
         }
-        isRunning = true
         log.notice("Capture started on device \(device, privacy: .public).")
         return stream
     }
@@ -265,8 +289,11 @@ nonisolated final class AudioCapture: @unchecked Sendable {
     func stop() {
         guard isRunning else { return }
         isRunning = false
-        engine.inputNode.removeTap(onBus: 0)
         engine.stop()
+        // `stop()` releases what `prepare()` allocated, so re-preparing here is
+        // what keeps the next `start()` from paying for the graph again. On the
+        // stop path, which is off the latency path entirely.
+        engine.prepare()
         converter = nil
         continuation?.finish()
         continuation = nil
@@ -285,6 +312,42 @@ nonisolated final class AudioCapture: @unchecked Sendable {
     func discardRecording() {
         retained = []
         retainedFormat = nil
+    }
+
+    /// Resolve the input device, pin it, and make sure the capture tap and the
+    /// graph are ready for it. **Idempotent while the device holds still**, which
+    /// is what takes the tap install and `prepare()` off every recording — they
+    /// were 27 ms and 14 ms of the gesture's path, paid again for a graph that had
+    /// not changed since the last one.
+    ///
+    /// It is install-once-*per-device*, not install-once. `pin` writes the device
+    /// onto the input unit, which changes the node's output format, so the format
+    /// is read after the pin and the tap is rebuilt whenever either has moved.
+    @discardableResult
+    private func arm() throws -> AudioDeviceID {
+        guard let device = selectedDevice?.id ?? Self.defaultInputDevice() else {
+            throw Failure.noInputDevice
+        }
+        try pin(device)
+        let input = engine.inputNode
+        let format = input.outputFormat(forBus: 0)
+        if tapDevice == device, let tapFormat, tapFormat == format { return device }
+
+        if tapFormat != nil { input.removeTap(onBus: 0) }
+        input.installTap(onBus: 0, bufferSize: Self.requestedBufferFrames, format: format) { [weak self] buffer, _ in
+            guard let self, isRunning else { return }
+            let level = Self.level(of: buffer)
+            smoothed = level > smoothed ? level : smoothed * 0.6 + level * 0.4
+            onLevel?(smoothed)
+            guard let converted = convert(buffer) else { return }
+            if retainedFormat == nil { retainedFormat = converted.format }
+            if let copy = Self.copy(converted) { retained.append(copy) }
+            continuation?.yield(AnalyzerInput(buffer: converted))
+        }
+        tapDevice = device
+        tapFormat = format
+        engine.prepare()
+        return device
     }
 
     /// Write the device onto the input unit rather than leaving the engine on
