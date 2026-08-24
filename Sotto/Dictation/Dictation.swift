@@ -41,6 +41,15 @@ final class Dictation {
     /// transcriber the moment `start()` hands the stream over.
     private var armed: AsyncStream<AnalyzerInput>?
 
+    /// **Live between `start()` and `stop()`, and `pipeline` cannot stand in for
+    /// it.** `pipeline` is also non-nil through the transcription tail, so a
+    /// release landing in that tail passed `stop()`'s guard and issued a second
+    /// `finalizeAndFinishThroughEndOfInput()` against an analyzer that was already
+    /// finalizing — measured 2026-08-24, two `finish` entries on one analyzer from
+    /// one gesture pair 40 ms apart. The tail belongs to the gesture that started
+    /// it; a later gesture must not be able to re-enter it.
+    private var capturing = false
+
     /// §4.9's routing input, read at the moment the user starts speaking rather
     /// than when they stop: clicking elsewhere to place a cursor deselects, so a
     /// selection read at the end would be a different question.
@@ -142,6 +151,8 @@ final class Dictation {
             }
         }
 
+        capturing = true
+
         // Read after capture is running, not before it: the Cmd+C fallback in
         // `selectedText()` polls the pasteboard for up to 300 ms, and paying that
         // ahead of the first sample would clip the first word. It suspends rather
@@ -163,7 +174,8 @@ final class Dictation {
     /// The gesture ended. Capture stops, the analyzer finalizes, and the text goes
     /// wherever §3 and §4.9 send it.
     func stop() {
-        guard pipeline != nil else { return }
+        guard capturing else { return }
+        capturing = false
         AudioCapture.shared.stop()
         // The waveform stays up through transcription: it is the surface that
         // reports the failure if one happens, and a HUD that vanished at the
@@ -231,6 +243,7 @@ final class Dictation {
     // MARK: -
 
     private func cancelPipeline() {
+        capturing = false
         AudioCapture.shared.stop()
         AudioCapture.shared.discardRecording()
         pipeline?.cancel()
@@ -281,7 +294,15 @@ final class Dictation {
     private func finish(with state: HUDState?) {
         pipeline = nil
         armed = nil
+        capturing = false
         selection = nil
+        // **The one exit closes the microphone too.** `finish` is reachable from
+        // `start()`'s catch with capture already running — `begin` throwing left
+        // the engine live, `pipeline` nil, and the release that followed rejected
+        // by `stop()`'s guard, so the device stayed open with no HUD and nothing
+        // to close it. `AudioCapture.stop()` is idempotent, so the paths that have
+        // already stopped pay nothing.
+        AudioCapture.shared.stop()
         Activity.shared.set(.recording, false)
 
         guard let state else {

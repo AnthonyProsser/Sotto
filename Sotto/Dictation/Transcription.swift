@@ -161,10 +161,62 @@ actor Transcription {
         defer { teardown() }
         guard let analyzer, let collector else { throw Failure.notPrepared }
         try await analyzer.finalizeAndFinishThroughEndOfInput()
+
+        // **The modules' result sequences do not reliably end when the analyzer
+        // does, and the two `await`s below are the only unbounded waits in a
+        // dictation.** Finalizing is the analyzer's statement that every result
+        // has been delivered, so `results` should finish with it. Measured
+        // 2026-08-24: after several short recordings in quick succession it
+        // sometimes does not, and `collector.value` then suspends forever. That
+        // suspension is the whole of the stuck-HUD bug — it holds
+        // `Dictation.pipeline` non-nil, so the HUD is never hidden, the idle
+        // signal keeps reporting `recording`, and every later gesture is rejected
+        // by the `pipeline == nil` guard until the app is relaunched.
+        //
+        // Sotto has paid everything it owes before this point: the input stream is
+        // finished (`AudioCapture.stop`) and `finalizeAndFinishThroughEndOfInput`
+        // has *returned*. The only missing signal is Apple's end-of-sequence, which
+        // is why this is a bounded wait rather than a defect to fix upstream of it.
+        // It is not a watchdog over Sotto's own state: nothing here resets the
+        // pipeline, sets a flag, or hides the HUD. It ends the wait, and the
+        // ordinary path then completes and clears the state itself — measured, the
+        // draft returns 1 ms after the grace fires and the dictation finishes
+        // normally with whatever was transcribed.
+        let forceEnd = Task { [weak self] in
+            try await Task.sleep(for: Self.resultGrace)
+            await self?.endSequencesThatOutlivedTheAnalyzer()
+        }
+        defer { forceEnd.cancel() }
+
         var draft = try await collector.value
         // A detector failure must not take the transcript with it.
         draft.pauses = (try? await pauseCollector?.value) ?? []
         return draft
+    }
+
+    /// **Two seconds, against a healthy delivery of under one millisecond.** Every
+    /// run that completed did so in 0–1 ms after finalize returned; the slow part
+    /// is finalizing itself, which is already over by the time this starts. The
+    /// grace is three orders of magnitude clear of the observed normal, so it
+    /// cannot expire on a working recording, and a wedged one costs the user two
+    /// seconds instead of a relaunch.
+    private static let resultGrace = Duration.seconds(2)
+
+    /// Only reachable from `finish()`'s grace, and only once the sequences have
+    /// outlived the analyzer feeding them. Whatever the collectors accumulated is
+    /// kept — ending the sequence lets `drain` return normally.
+    private func endSequencesThatOutlivedTheAnalyzer() async {
+        log.error("Result sequences did not end after finalize; cancelling the collectors.")
+        // **Cancelling the drains is what unblocks `finish()`, and it has to come
+        // first.** `cancelAndFinishNow()` alone was tried and does not work — the
+        // grace fired, the call was made, and the collectors stayed suspended
+        // anyway (measured 2026-08-24, 4 of 5 rounds still wedged). It is still
+        // called, because leaving an analyzer unfinished is worse than calling it,
+        // but it is called *after* the cancels so that a hang inside it cannot
+        // take the recovery with it.
+        collector?.cancel()
+        pauseCollector?.cancel()
+        await analyzer?.cancelAndFinishNow()
     }
 
     /// Escape priority 2 (§10.4). Throws away whatever has been transcribed —
