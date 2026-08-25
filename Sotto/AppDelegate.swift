@@ -21,6 +21,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ aNotification: Notification) {
+        guard ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil,
+              ProcessInfo.processInfo.environment["XCInjectBundleInto"] == nil,
+              NSClassFromString("XCTestCase") == nil else {
+            return
+        }
         StatusItemController.shared.install()
         EventTap.shared.install()
         // Resolves the locale, claims it with `AssetInventory.reserve`, and caches
