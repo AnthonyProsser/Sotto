@@ -28,6 +28,7 @@ MAX_LINES="${MAX_LINES:-800}"
 NO_PUBLISH=0
 SELF_TEST=0
 SKIP_BASELINE=0
+GATE=0
 
 usage() {
   print "usage: sotto-night [--self-test] [--no-publish] [--max-turns N] [--skip-baseline]"
@@ -38,6 +39,7 @@ while [[ $# -gt 0 ]]; do
     --self-test) SELF_TEST=1; shift ;;
     --no-publish) NO_PUBLISH=1; shift ;;
     --skip-baseline) SKIP_BASELINE=1; shift ;;
+    --gate) GATE=1; shift ;;
     --max-turns) MAX_TURNS="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) print -u2 "unknown arg: $1"; usage; exit 2 ;;
@@ -216,21 +218,28 @@ run_tests() {
   return 1
 }
 
+unit_paths() {
+  gitn status --porcelain -- . ':(exclude)tools/night/state' ':(exclude)tools/night/MORNING-REPORT.md'
+}
+
 dirty() {
-  [[ -n "$(gitn status --porcelain -- . ':(exclude)tools/night/state' ':(exclude)tools/night/MORNING-REPORT.md')" ]]
+  [[ -n "$(unit_paths)" ]]
 }
 
 diff_limits_ok() {
-  local files lines
-  files="$(gitn diff --numstat HEAD -- . ':(exclude)tools/night/state' | awk 'NF==3 {c++} END {print c+0}')"
-  lines="$(gitn diff --numstat HEAD -- . ':(exclude)tools/night/state' | awk '{a+=$1+$2} END {print a+0}')"
+  local files lines names
+  gitn add -A -- Sotto SottoTests Sotto.xcodeproj DECISIONS.md 2>/dev/null || true
+  gitn reset -q -- tools/night/state 2>/dev/null || true
+  files="$(gitn diff --cached --numstat | awk 'NF==3 {c++} END {print c+0}')"
+  lines="$(gitn diff --cached --numstat | awk '{a+=$1+$2} END {print a+0}')"
+  names="$(gitn diff --cached --name-only)"
+  gitn reset -q
   log "diff: $files files, $lines lines"
   if (( files > MAX_FILES || lines > MAX_LINES )); then
     print -u2 "diff exceeds limits ($files files / $lines lines)"
     return 1
   fi
-  # forbidden paths
-  if gitn diff --name-only HEAD | grep -E '^(docs/|AGENTS\.md|CLAUDE\.md|\.claude/)' >/dev/null; then
+  if print -- "$names" | grep -E '^(docs/|AGENTS\.md|CLAUDE\.md|\.claude/)' >/dev/null; then
     print -u2 "forbidden path in diff"
     return 1
   fi
@@ -249,7 +258,22 @@ restore_unit() {
 commit_unit() {
   local msg
   if [[ -s "$STATE/proposed-commit.md" ]]; then
-    msg="$(head -1 "$STATE/proposed-commit.md")"
+    msg="$(python3 - "$STATE/proposed-commit.md" <<'PY'
+from pathlib import Path
+import re, sys
+text = Path(sys.argv[1]).read_text()
+for line in text.splitlines():
+    m = re.match(r"\*\*Subject:\*\*\s*(.+)", line)
+    if m:
+        print(m.group(1).strip())
+        raise SystemExit
+    if line.startswith("#") or not line.strip():
+        continue
+    print(line.strip()[:72])
+    raise SystemExit
+print("night: backend unit")
+PY
+)"
   else
     msg="night: backend unit"
   fi
@@ -350,9 +374,11 @@ run_critic() {
       print "(none written)"
     fi
     print
-    print "## Diff"
+    print "## Diff (includes previously untracked files)"
     print '```'
-    gitn diff HEAD -- . ':(exclude)tools/night/state'
+    gitn add -A -- Sotto SottoTests Sotto.xcodeproj DECISIONS.md 2>/dev/null || true
+    gitn diff --cached -- . ':(exclude)tools/night/state'
+    gitn reset -q
     print '```'
     print
     print "## Test log tail"
@@ -360,9 +386,14 @@ run_critic() {
     tail -80 "$STATE"/tests-*.log 2>/dev/null | tail -80
     print '```'
   } > "$packet"
-  run_opencode critic "$out" -- "$(cat "$packet")"
+  run_opencode critic "$out" -- "You are ONLY the independent critic. Do not implement. Do not continue the lead's work. Your first line must be exactly VERDICT: APPROVE or VERDICT: REJECT.
+
+$(cat "$packet")"
   python3 "$PARSE" text "$out" > "$STATE/last-review.md" || true
-  python3 "$PARSE" verdict "$out" | tee "$STATE/last-verdict.txt"
+  local verdict
+  verdict="$(python3 "$PARSE" verdict "$out" || true)"
+  [[ -n "$verdict" ]] || verdict="UNKNOWN"
+  print -- "$verdict" | tee "$STATE/last-verdict.txt"
 }
 
 maybe_stop_flags() {
@@ -569,6 +600,7 @@ init_ledger() {
   json_set rejected 0
   json_set paid_model_used "no"
   json_set main_modified "no"
+  json_set stop_reason ""
   write_report
   print -- "# Overnight state\n\nStart $(json_get start_commit) on $EXPECTED_BRANCH.\nModel $MODEL.\nInspect Slice 7 first.\n" > "$STATE/STATE.md"
 }
@@ -579,6 +611,37 @@ init_ledger
 
 if (( SELF_TEST )); then
   self_test
+  exit 0
+fi
+
+gate_pending() {
+  log "=== gate pending unit ==="
+  if ! dirty; then
+    log "nothing pending"
+    return 0
+  fi
+  if ! diff_limits_ok; then
+    restore_unit "diff limits at gate"
+    return 0
+  fi
+  if ! run_tests "gate"; then
+    restore_unit "gate tests failed"
+    return 0
+  fi
+  local verdict
+  verdict="$(run_critic | tail -1)"
+  if [[ "$verdict" != "APPROVE" ]]; then
+    bump rejected
+    restore_unit "critic $verdict at gate"
+    return 0
+  fi
+  bump approved
+  commit_unit || true
+  write_report
+}
+
+if (( GATE )); then
+  gate_pending
   exit 0
 fi
 
