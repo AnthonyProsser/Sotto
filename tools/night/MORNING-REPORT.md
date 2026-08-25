@@ -1,10 +1,10 @@
 # Sotto overnight morning report
 
-- Start time: 2026-08-24 23:09:42 CDT
+- Start time: 2026-08-24 23:12:25 CDT
 - Stop time: 2026-08-24 22:36:56 CDT
 - Deadline: 2026-08-25 06:00:00
-- Starting commit: 8738937
-- Ending commit: 8738937
+- Starting commit: 0f4be15
+- Ending commit: 0f4be15
 - Night branch: night/2026-08-24
 - Worktree: /Users/anthonyprosser/Code/Sotto-night
 - Exact model ID: opencode/x-preview-f-free
@@ -19,7 +19,7 @@
 - Merge occurred: no
 
 ## Commits created
-- none
+- `0f4be15 Add Slice 8 backend: Hugging Face model acquisition plumbing`
 
 ## Files changed
 - 
@@ -29,6 +29,7 @@
 
 ## Tests
 - `xcodebuild -scheme Sotto -destination platform=macOS -derivedDataPath /Users/anthonyprosser/Code/Sotto-night/tools/night/state/DerivedData -only-testing:SottoTests test` → fail
+- `xcodebuild -scheme Sotto -destination platform=macOS -derivedDataPath /Users/anthonyprosser/Code/Sotto-night/tools/night/state/DerivedData -only-testing:SottoTests test` → pass
 - `xcodebuild -scheme Sotto -destination platform=macOS -derivedDataPath /Users/anthonyprosser/Code/Sotto-night/tools/night/state/DerivedData -only-testing:SottoTests test` → pass
 - `xcodebuild -scheme Sotto -destination platform=macOS -derivedDataPath /Users/anthonyprosser/Code/Sotto-night/tools/night/state/DerivedData -only-testing:SottoTests test` → pass
 
