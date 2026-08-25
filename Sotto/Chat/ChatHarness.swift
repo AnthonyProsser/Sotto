@@ -1,205 +1,141 @@
 import Foundation
 import os
 
-/// Protocol for custom or MCP tool execution.
-public nonisolated protocol ChatToolExecutor: Sendable {
-    func execute(call: ToolCall) async throws -> String
-}
-
-/// Simple closure-based tool executor.
-public nonisolated struct BlockToolExecutor: ChatToolExecutor {
-    private let block: @Sendable (ToolCall) async throws -> String
-
-    public init(_ block: @escaping @Sendable (ToolCall) async throws -> String) {
-        self.block = block
-    }
-
-    public func execute(call: ToolCall) async throws -> String {
-        try await block(call)
-    }
-}
-
-/// The multi-turn conversation and tool execution harness loop (~400 lines).
+/// The multi-turn loop (§7.1): messages → model → if tool calls, execute, append, repeat.
 ///
-/// Handles:
-/// - Native tool calling for models declaring `tools == true` in `CapabilityRegistry`
-/// - Prompt-and-parse JSON schema fallback for smaller models declaring `tools == false`
-/// - Tool execution, result injection, and iterative generation until model finishes
-public nonisolated final class ChatHarness: @unchecked Sendable {
+/// Two tool paths, chosen by `ModelCapability.tools`:
+///
+/// - **Native** — the model emits structured calls the backend reports as
+///   `.toolCall`, and this loop dispatches them.
+/// - **Prompt-and-parse** — the tool list goes into the system prompt and the
+///   model answers with a JSON object, which `FallbackToolBuffer` recognises.
+///   Still needed even with MLX in the graph: `MLXLMCommon` only parses
+///   `<tool_call>` tags, so anything not using that convention lands here.
+///
+/// A backend that runs its own loop (`executesToolsInternally`) is passed
+/// through untouched — dispatching its calls again would run every tool twice.
+nonisolated final class ChatHarness: @unchecked Sendable {
     private let log = Logger(subsystem: "com.anthonyprosser.Sotto", category: "chat-harness")
 
-    public static let shared = ChatHarness()
+    static let shared = ChatHarness()
 
-    public init() {}
+    init() {}
 
-    /// Format JSON schema fallback prompt for models without native tool tokens.
-    public static func injectJSONSchemaFallback(
+    /// Holds back tokens only while they could still turn out to be a fallback
+    /// tool call, so protocol JSON never reaches the transcript or the screen.
+    ///
+    /// The instruction tells the model to answer with a bare JSON object, so the
+    /// first non-whitespace character settles it: anything that is not `{` or a
+    /// fence can be released immediately and streamed normally from then on.
+    /// Buffering the whole turn instead would cost live streaming on every
+    /// answer these models give, tool call or not.
+    struct FallbackToolBuffer {
+        private(set) var held = ""
+        private(set) var isHolding = true
+
+        /// Returns the text that may be shown now, if any.
+        mutating func append(_ token: String) -> String? {
+            guard isHolding else { return token }
+            held += token
+
+            let trimmed = held.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let first = trimmed.first else { return nil }
+
+            if first == "{" || first == "`" {
+                return nil
+            }
+            isHolding = false
+            let release = held
+            held = ""
+            return release
+        }
+
+        /// At end of turn: the parsed call, or the text to show and record.
+        mutating func resolve() -> (call: ToolCall?, text: String) {
+            guard isHolding else { return (nil, "") }
+            isHolding = false
+            let text = held
+            held = ""
+            if let call = ChatHarness.parseJSONToolFallback(content: text) {
+                return (call, "")
+            }
+            return (nil, text)
+        }
+    }
+
+    /// The tool list, rendered into a system prompt for models with no native format.
+    static func injectJSONSchemaFallback(
         tools: [ToolDefinition],
         systemPrompt: String?
     ) -> String {
-        guard !tools.isEmpty else {
-            return systemPrompt ?? ""
+        guard !tools.isEmpty else { return systemPrompt ?? "" }
+
+        var text = ""
+        if let systemPrompt, !systemPrompt.isEmpty {
+            text += "\(systemPrompt)\n\n"
         }
-
-        var text = (systemPrompt != nil && !systemPrompt!.isEmpty) ? "\(systemPrompt!)\n\n" : ""
         text += "You have access to the following tools:\n"
-
         for tool in tools {
             text += "- \(tool.name): \(tool.description)\n  Schema: \(tool.parametersJSONSchema)\n"
         }
-
         text += """
 
-If you want to invoke a tool, you MUST respond ONLY with a JSON object in the following format:
-```json
-{
-  "tool": "<tool_name>",
-  "arguments": { <arguments> }
-}
-```
-If no tool is needed, respond with your normal plain text answer.
-"""
+        If you want to invoke a tool, you MUST respond ONLY with a JSON object in the following format:
+        ```json
+        {
+          "tool": "<tool_name>",
+          "arguments": { <arguments> }
+        }
+        ```
+        If no tool is needed, respond with your normal plain text answer.
+        """
         return text
     }
 
-    /// Attempt to parse JSON fallback tool call from plain assistant response text.
-    public static func parseJSONToolFallback(content: String) -> ToolCall? {
+    /// Parses a fallback tool call out of plain assistant text.
+    static func parseJSONToolFallback(content: String) -> ToolCall? {
         var jsonText = content.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        if let jsonBlockStart = jsonText.range(of: "```json") {
-            let after = jsonText[jsonBlockStart.upperBound...]
-            if let endFence = after.range(of: "```") {
-                jsonText = String(after[..<endFence.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
-            }
-        } else if let genericBlockStart = jsonText.range(of: "```") {
-            let after = genericBlockStart.upperBound < jsonText.endIndex ? jsonText[genericBlockStart.upperBound...] : ""
-            if let endFence = after.range(of: "```") {
-                jsonText = String(after[..<endFence.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+        if let fenceStart = jsonText.range(of: "```json") ?? jsonText.range(of: "```") {
+            let after = jsonText[fenceStart.upperBound...]
+            if let fenceEnd = after.range(of: "```") {
+                jsonText = String(after[..<fenceEnd.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
             }
         }
 
-        guard jsonText.hasPrefix("{") && jsonText.hasSuffix("}"),
+        guard jsonText.hasPrefix("{"), jsonText.hasSuffix("}"),
               let data = jsonText.data(using: .utf8),
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let name = (object["tool"] as? String) ?? (object["name"] as? String),
+              !name.isEmpty else {
             return nil
         }
 
-        let toolName = (obj["tool"] as? String) ?? (obj["name"] as? String)
-        guard let name = toolName, !name.isEmpty else {
-            return nil
-        }
-
-        let argsObj = obj["arguments"] ?? obj["parameters"] ?? [:]
-        let argsData = (try? JSONSerialization.data(withJSONObject: argsObj)) ?? Data("{}".utf8)
-        let argsString = String(data: argsData, encoding: .utf8) ?? "{}"
-
-        return ToolCall(id: UUID().uuidString, name: name, arguments: argsString)
+        let arguments = object["arguments"] ?? object["parameters"] ?? [:]
+        let encoded = (try? JSONSerialization.data(withJSONObject: arguments)) ?? Data("{}".utf8)
+        return ToolCall(name: name, arguments: String(data: encoded, encoding: .utf8) ?? "{}")
     }
 
-    /// Execute multi-turn generation loop with tool execution.
-    public func executeLoop(
+    func executeLoop(
         messages: [ChatMessage],
         backend: ChatBackend,
         capability: ModelCapability,
-        tools: [ToolDefinition] = [],
-        toolExecutors: [String: ChatToolExecutor] = [:],
+        tools: [ChatTool] = [],
         systemPrompt: String? = nil,
         maxToolTurns: Int = 8
     ) -> AsyncThrowingStream<ChatStreamEvent, Error> {
-        return AsyncThrowingStream(ChatStreamEvent.self) { continuation in
+        AsyncThrowingStream(ChatStreamEvent.self) { continuation in
             let task = Task {
                 do {
-                    var history = messages
-                    var currentTurn = 0
-                    let supportsNativeTools = capability.tools
-                    let nativeTools = supportsNativeTools ? tools : []
-
-                    let effectiveSystemPrompt: String? = supportsNativeTools
-                        ? systemPrompt
-                        : Self.injectJSONSchemaFallback(tools: tools, systemPrompt: systemPrompt)
-
-                    while currentTurn < maxToolTurns {
-                        try Task.checkCancellation()
-                        currentTurn += 1
-
-                        var turnTokens = ""
-                        var turnToolCalls: [ToolCall] = []
-
-                        let stream = try await backend.generateStream(
-                            messages: history,
-                            tools: nativeTools,
-                            systemPrompt: effectiveSystemPrompt
-                        )
-
-                        for try await event in stream {
-                            try Task.checkCancellation()
-
-                            switch event {
-                            case .token(let token):
-                                turnTokens += token
-                                continuation.yield(.token(token))
-
-                            case .toolCall(let toolCall):
-                                turnToolCalls.append(toolCall)
-                                continuation.yield(.toolCall(toolCall))
-
-                            case .turnCompleted(let model, let reason):
-                                if turnToolCalls.isEmpty && !supportsNativeTools {
-                                    // Check JSON fallback parsing
-                                    if let fallbackCall = Self.parseJSONToolFallback(content: turnTokens) {
-                                        turnToolCalls.append(fallbackCall)
-                                        continuation.yield(.toolCall(fallbackCall))
-                                    }
-                                }
-
-                                if turnToolCalls.isEmpty {
-                                    continuation.yield(.turnCompleted(model: model, finishReason: reason))
-                                }
-                            }
-                        }
-
-                        // If no tool calls were requested, the conversation turn is complete
-                        if turnToolCalls.isEmpty {
-                            continuation.finish()
-                            return
-                        }
-
-                        // Record assistant turn with tool calls in history
-                        let assistantMsg = ChatMessage(
-                            role: .assistant,
-                            content: turnTokens,
-                            model: backend.id,
-                            toolCalls: turnToolCalls
-                        )
-                        history.append(assistantMsg)
-
-                        // Execute all requested tool calls
-                        for call in turnToolCalls {
-                            try Task.checkCancellation()
-
-                            let toolResultText: String
-                            if let executor = toolExecutors[call.name] {
-                                do {
-                                    toolResultText = try await executor.execute(call: call)
-                                } catch {
-                                    toolResultText = "Error executing tool '\(call.name)': \(error.localizedDescription)"
-                                }
-                            } else {
-                                toolResultText = "Error: Tool '\(call.name)' is not registered."
-                            }
-
-                            let toolResultMsg = ChatMessage(
-                                role: .tool,
-                                content: toolResultText,
-                                toolCallId: call.id
-                            )
-                            history.append(toolResultMsg)
-                        }
-
-                        // Loop continues to feed tool results back to backend for the next turn
-                    }
-
-                    continuation.yield(.turnCompleted(model: backend.id, finishReason: "max_tool_turns_reached"))
+                    try await self.run(
+                        messages: messages,
+                        backend: backend,
+                        capability: capability,
+                        tools: tools,
+                        systemPrompt: systemPrompt,
+                        maxToolTurns: maxToolTurns,
+                        into: continuation
+                    )
                     continuation.finish()
                 } catch is CancellationError {
                     continuation.finish(throwing: ChatBackendError.cancelled)
@@ -207,10 +143,139 @@ If no tool is needed, respond with your normal plain text answer.
                     continuation.finish(throwing: error)
                 }
             }
+            continuation.onTermination = { @Sendable _ in task.cancel() }
+        }
+    }
 
-            continuation.onTermination = { @Sendable _ in
-                task.cancel()
+    private func run(
+        messages: [ChatMessage],
+        backend: ChatBackend,
+        capability: ModelCapability,
+        tools: [ChatTool],
+        systemPrompt: String?,
+        maxToolTurns: Int,
+        into continuation: AsyncThrowingStream<ChatStreamEvent, Error>.Continuation
+    ) async throws {
+        var history = messages
+        let usesFallback = !tools.isEmpty && !capability.tools && !backend.executesToolsInternally
+        let executors = Dictionary(
+            tools.map { ($0.definition.name, $0.executor) },
+            uniquingKeysWith: { _, last in last }
+        )
+
+        let effectiveSystemPrompt = usesFallback
+            ? Self.injectJSONSchemaFallback(tools: tools.map(\.definition), systemPrompt: systemPrompt)
+            : systemPrompt
+
+        for _ in 0..<maxToolTurns {
+            try Task.checkCancellation()
+
+            var text = ""
+            var calls: [ToolCall] = []
+            var buffer = FallbackToolBuffer()
+            var completion: (model: String, reason: String?)?
+
+            let stream = try await backend.generateStream(
+                messages: history,
+                tools: usesFallback ? [] : tools,
+                systemPrompt: effectiveSystemPrompt
+            )
+
+            for try await event in stream {
+                try Task.checkCancellation()
+
+                switch event {
+                case .token(let token):
+                    if usesFallback {
+                        if let visible = buffer.append(token) {
+                            text += visible
+                            continuation.yield(.token(visible))
+                        }
+                    } else {
+                        text += token
+                        continuation.yield(.token(token))
+                    }
+
+                case .toolCall(let call):
+                    // A self-executing backend reports its calls so the surface
+                    // can show them; collecting one here would run it a second
+                    // time, because the backend has already run it.
+                    if !backend.executesToolsInternally {
+                        calls.append(call)
+                    }
+                    continuation.yield(.toolCall(call))
+
+                case .message(let message):
+                    // A self-executing backend reports its own record directly.
+                    history.append(message)
+                    continuation.yield(.message(message))
+
+                case .turnCompleted(let model, let reason):
+                    completion = (model, reason)
+                }
+            }
+
+            if usesFallback {
+                let (call, remaining) = buffer.resolve()
+                if let call {
+                    calls.append(call)
+                    continuation.yield(.toolCall(call))
+                } else if !remaining.isEmpty {
+                    text += remaining
+                    continuation.yield(.token(remaining))
+                }
+            }
+
+            guard !calls.isEmpty else {
+                // A backend that executes internally has already reported its
+                // assistant turn as `.message`; recording `text` too would double it.
+                if !backend.executesToolsInternally {
+                    let assistant = ChatMessage(role: .assistant, content: text, model: backend.id)
+                    history.append(assistant)
+                    continuation.yield(.message(assistant))
+                }
+                if let completion {
+                    continuation.yield(.turnCompleted(model: completion.model, finishReason: completion.reason))
+                }
+                return
+            }
+
+            let assistant = ChatMessage(
+                role: .assistant,
+                content: text,
+                model: backend.id,
+                toolCalls: calls
+            )
+            history.append(assistant)
+            continuation.yield(.message(assistant))
+
+            for call in calls {
+                try Task.checkCancellation()
+
+                let output: String
+                if let executor = executors[call.name] {
+                    do {
+                        output = try await executor.execute(call: call)
+                    } catch {
+                        log.error("Tool \(call.name, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
+                        output = "Error executing tool '\(call.name)': \(error.localizedDescription)"
+                    }
+                } else {
+                    output = "Error: Tool '\(call.name)' is not registered."
+                }
+
+                let result = ChatMessage(
+                    role: .tool,
+                    content: output,
+                    toolCallId: call.id,
+                    toolName: call.name
+                )
+                history.append(result)
+                continuation.yield(.message(result))
             }
         }
+
+        log.notice("Tool loop hit its \(maxToolTurns) turn ceiling")
+        continuation.yield(.turnCompleted(model: backend.id, finishReason: "max_tool_turns_reached"))
     }
 }

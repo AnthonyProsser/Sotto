@@ -1,20 +1,24 @@
 import Foundation
 
 /// Supported model execution backends in Sotto.
-public nonisolated enum BackendType: String, Sendable, Codable, Equatable, CaseIterable {
+nonisolated enum BackendType: String, Sendable, Codable, Equatable, CaseIterable {
     case appleFoundation = "apple_foundation"
     case mlx = "mlx"
     case openAI = "openai"
 }
 
-/// Declared capabilities for a specific model ID.
-public nonisolated struct ModelCapability: Sendable, Codable, Equatable {
-    public let vision: Bool
-    public let tools: Bool
-    public let maxContext: Int
-    public let backendType: BackendType
+/// Declared capabilities for a specific model ID (§7.2).
+///
+/// `vision` is the only gate in Sotto — it gates on the model, never the machine.
+/// `tools` selects between the harness's two tool paths, so a wrong answer here
+/// is a silent no-op rather than an error: see `toolsSupported(chatTemplate:)`.
+nonisolated struct ModelCapability: Sendable, Codable, Equatable {
+    let vision: Bool
+    let tools: Bool
+    let maxContext: Int
+    let backendType: BackendType
 
-    public init(vision: Bool, tools: Bool, maxContext: Int, backendType: BackendType) {
+    init(vision: Bool, tools: Bool, maxContext: Int, backendType: BackendType) {
         self.vision = vision
         self.tools = tools
         self.maxContext = maxContext
@@ -23,35 +27,36 @@ public nonisolated struct ModelCapability: Sendable, Codable, Equatable {
 }
 
 /// Thread-safe registry mapping `model_id -> ModelCapability(vision, tools, max_ctx, backendType)`.
-public nonisolated final class CapabilityRegistry: @unchecked Sendable {
-    public static let shared = CapabilityRegistry()
+nonisolated final class CapabilityRegistry: @unchecked Sendable {
+    static let shared = CapabilityRegistry()
 
     private let lock = NSLock()
     private var registry: [String: ModelCapability] = [:]
 
-    /// Default capability for Apple Foundation Models (SystemLanguageModel).
-    /// Fixed at 4096 tokens total, tools supported, vision false per §7.2 / models-and-network.md §1.1.
-    public static let appleFoundationDefault = ModelCapability(
+    /// Apple's on-device model. 4096 total — prompt *and* output — confirmed at
+    /// runtime, and `vision` is permanently false: it is a text-only model
+    /// (`rules/models-and-network.md` §1.1). Tools are native.
+    static let appleFoundationDefault = ModelCapability(
         vision: false,
         tools: true,
         maxContext: 4096,
         backendType: .appleFoundation
     )
 
-    public init() {
+    init() {
         self.registry["apple-foundation"] = Self.appleFoundationDefault
         self.registry["system"] = Self.appleFoundationDefault
     }
 
     /// Register or override capabilities for a given model ID.
-    public func register(modelId: String, capability: ModelCapability) {
+    func register(modelId: String, capability: ModelCapability) {
         lock.lock()
         defer { lock.unlock() }
         registry[modelId] = capability
     }
 
-    /// Retrieve capability for a model ID, falling back to Apple Foundation default if matching standard system tags.
-    public func capability(for modelId: String) -> ModelCapability? {
+    /// Retrieve capability for a model ID.
+    func capability(for modelId: String) -> ModelCapability? {
         lock.lock()
         defer { lock.unlock() }
         if let cap = registry[modelId] {
@@ -64,14 +69,14 @@ public nonisolated final class CapabilityRegistry: @unchecked Sendable {
     }
 
     /// Remove a registered model.
-    public func unregister(modelId: String) {
+    func unregister(modelId: String) {
         lock.lock()
         defer { lock.unlock() }
         registry.removeValue(forKey: modelId)
     }
 
     /// Clear all registered models except built-ins.
-    public func reset() {
+    func reset() {
         lock.lock()
         defer { lock.unlock() }
         registry.removeAll()
@@ -81,9 +86,27 @@ public nonisolated final class CapabilityRegistry: @unchecked Sendable {
 
     // MARK: - Parsers
 
-    /// Parse Hugging Face / MLX `config.json` data for capability detection and model geometry.
-    public static func parseMLXConfig(
+    /// Whether a model's chat template can render tool definitions.
+    ///
+    /// A template that never mentions tools drops them on the floor, so declaring
+    /// `tools: true` for one means the harness sends native definitions the model
+    /// never sees and the prompt-and-parse fallback never runs — the call is
+    /// silently impossible. **Unknown therefore answers `false`**: the fallback
+    /// works on any model, so guessing low degrades to a slower path while
+    /// guessing high removes the capability outright.
+    static func toolsSupported(chatTemplate: String?) -> Bool {
+        guard let chatTemplate else { return false }
+        return chatTemplate.contains("tools") || chatTemplate.contains("tool_calls")
+    }
+
+    /// Parse Hugging Face / MLX `config.json` for capability detection and model geometry.
+    ///
+    /// `chatTemplate` is the model's Jinja template, which may live in
+    /// `tokenizer_config.json` or in a sibling `chat_template.jinja`;
+    /// `ModelStore` resolves that and passes whichever it found.
+    static func parseMLXConfig(
         data: Data,
+        chatTemplate: String? = nil,
         defaultBackend: BackendType = .mlx
     ) throws -> (capability: ModelCapability, geometry: ModelGeometry?) {
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
@@ -115,9 +138,6 @@ public nonisolated final class CapabilityRegistry: @unchecked Sendable {
             ?? (json["sliding_window"] as? Int)
             ?? 4096
 
-        // Tools capability heuristic (e.g. gemma, qwen, llama, mistral)
-        let tools = true
-
         // Geometry extraction
         let layers = (json["num_hidden_layers"] as? Int)
             ?? (json["n_layer"] as? Int)
@@ -144,7 +164,7 @@ public nonisolated final class CapabilityRegistry: @unchecked Sendable {
 
         let capability = ModelCapability(
             vision: vision,
-            tools: tools,
+            tools: toolsSupported(chatTemplate: chatTemplate),
             maxContext: maxContext,
             backendType: defaultBackend
         )
@@ -153,7 +173,7 @@ public nonisolated final class CapabilityRegistry: @unchecked Sendable {
     }
 
     /// Parse Ollama `/api/show` response data.
-    public static func parseOllamaShow(
+    static func parseOllamaShow(
         data: Data,
         defaultBackend: BackendType = .openAI
     ) throws -> (capability: ModelCapability, geometry: ModelGeometry?) {
@@ -170,6 +190,12 @@ public nonisolated final class CapabilityRegistry: @unchecked Sendable {
             let lowerCaps = capabilities.map { $0.lowercased() }
             tools = lowerCaps.contains("tools")
             vision = lowerCaps.contains("vision") || lowerCaps.contains("clip")
+        }
+
+        // Older Ollama builds predate `capabilities` and answer only with the
+        // template, which is the same evidence the MLX path reads.
+        if !tools, let template = json["template"] as? String {
+            tools = toolsSupported(chatTemplate: template)
         }
 
         if !vision, let details = json["details"] as? [String: Any] {

@@ -95,7 +95,9 @@ struct MemoryEstimatorTests {
         let (capability, geometry) = try CapabilityRegistry.parseMLXConfig(data: data)
 
         #expect(capability.vision == true)
-        #expect(capability.tools == true)
+        // `config.json` says nothing about tools; the chat template does, and
+        // none was supplied. This asserted `true` while it was hardcoded.
+        #expect(capability.tools == false)
         #expect(capability.maxContext == 32768)
         #expect(capability.backendType == .mlx)
 

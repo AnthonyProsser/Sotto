@@ -1,9 +1,9 @@
 import Foundation
 import os
 
-/// High-level coordinator managing chat sessions, backend instances, and execution.
-public nonisolated final class ChatEngine: @unchecked Sendable {
-    public static let shared = ChatEngine()
+/// High-level coordinator managing chat sessions and backend instances.
+nonisolated final class ChatEngine: @unchecked Sendable {
+    static let shared = ChatEngine()
 
     private let lock = NSLock()
     private var activeSessions: [UUID: ChatSession] = [:]
@@ -11,29 +11,44 @@ public nonisolated final class ChatEngine: @unchecked Sendable {
 
     private let log = Logger(subsystem: "com.anthonyprosser.Sotto", category: "chat-engine")
 
-    public init() {
-        // Register default Apple Foundation backend
+    init() {
+        // Apple's on-device model is the default so chat works at first run with
+        // nothing downloaded (`rules/models-and-network.md` §1.1).
         let apple = AppleFoundationBackend()
         self.backends[apple.id] = apple
         self.backends["system"] = apple
     }
 
     /// Register a backend with the engine.
-    public func registerBackend(_ backend: ChatBackend) {
+    func registerBackend(_ backend: ChatBackend) {
         lock.lock()
         defer { lock.unlock() }
         backends[backend.id] = backend
     }
 
     /// Retrieve a registered backend by ID.
-    public func backend(for id: String) -> ChatBackend? {
+    func backend(for id: String) -> ChatBackend? {
         lock.lock()
         defer { lock.unlock() }
         return backends[id]
     }
 
-    /// Create or retrieve a new chat session.
-    public func createSession(
+    /// Every model already on disk, registered as a backend and a capability.
+    ///
+    /// Discovery only — §7.4's acquisition ladder, the curated browser, and the
+    /// download surface are slice 8's. This exists because slice 7's chat cannot
+    /// run a local model it has no way to name.
+    @discardableResult
+    func registerLocalModels(in root: URL = ModelStore.root) -> [LocalModel] {
+        let models = ModelStore.registerAll(in: root)
+        for model in models {
+            registerBackend(MLXBackend(model: model))
+        }
+        return models
+    }
+
+    /// Create a new chat session.
+    func createSession(
         id: UUID = UUID(),
         slug: String? = nil,
         title: String? = nil,
@@ -54,14 +69,14 @@ public nonisolated final class ChatEngine: @unchecked Sendable {
     }
 
     /// Retrieve an existing session by ID.
-    public func session(for id: UUID) -> ChatSession? {
+    func session(for id: UUID) -> ChatSession? {
         lock.lock()
         defer { lock.unlock() }
         return activeSessions[id]
     }
 
     /// Remove a session from active tracking.
-    public func closeSession(id: UUID) {
+    func closeSession(id: UUID) {
         lock.lock()
         activeSessions.removeValue(forKey: id)
         lock.unlock()

@@ -21,9 +21,17 @@ struct ChatBackendTests {
         #expect(msg.toolCalls?.count == 1)
         #expect(msg.toolCalls?.first?.name == "calculate")
 
-        let toolRes = ToolResult(callId: "call_123", name: "calculate", content: "{\"result\": 84}")
-        #expect(toolRes.callId == "call_123")
-        #expect(toolRes.content.contains("84"))
+        // A result is a `.tool` message, not a separate type: it has to live in
+        // `messages` to be sent back to the model and written to `chat.md`.
+        let result = ChatMessage(
+            role: .tool,
+            content: "{\"result\": 84}",
+            toolCallId: "call_123",
+            toolName: "calculate"
+        )
+        #expect(result.toolCallId == "call_123")
+        #expect(result.toolName == "calculate")
+        #expect(result.content.contains("84"))
     }
 
     @Test func localServerEndpointsHaveExpectedDefaults() {
@@ -41,6 +49,8 @@ struct ChatBackendTests {
         let backend = AppleFoundationBackend(id: "system-test")
         #expect(backend.id == "system-test")
         #expect(backend.backendType == .appleFoundation)
+        // `LanguageModelSession` calls the tool itself, so the harness must not.
+        #expect(backend.executesToolsInternally == true)
     }
 
     @Test func openAICompatibleBackendConfiguration() {
@@ -49,5 +59,6 @@ struct ChatBackendTests {
         #expect(backend.id == "qwen2.5:7b")
         #expect(backend.baseURL == url)
         #expect(backend.backendType == .openAI)
+        #expect(backend.executesToolsInternally == false)
     }
 }
