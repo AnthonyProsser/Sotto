@@ -5,7 +5,8 @@
 //  Slice 8's acquisition plumbing against a stubbed URLProtocol, never the
 //  network: what survives the manifest filter, download → verify → promote,
 //  resume across launches through an HTTP Range, corrupt-payload discard, and
-//  the already-on-disk rung winning before any byte moves.
+//  the already-on-disk rung winning before any byte moves. Rung three —
+//  `ollama pull`, delegated — streams here too.
 //
 
 import Testing
@@ -144,6 +145,22 @@ private func manifestJSON(siblings: [String]) -> String {
 private func siblingJSON(name: String, size: Int, sha256: String? = nil) -> String {
     let lfs = sha256.map { ",\"lfs\":{\"oid\":\"\($0)\",\"size\":\(size)}" } ?? ""
     return "{\"rfilename\":\"\(name)\",\"size\":\(size)\(lfs)}"
+}
+
+/// URLProtocol hands the body over as a stream; read it back either way.
+private func requestBody(_ request: URLRequest) -> Data {
+    if let data = request.httpBody { return data }
+    guard let stream = request.httpBodyStream else { return Data() }
+    stream.open()
+    defer { stream.close() }
+    var data = Data()
+    var buffer = [UInt8](repeating: 0, count: 4096)
+    while stream.hasBytesAvailable {
+        let read = stream.read(&buffer, maxLength: buffer.count)
+        guard read > 0 else { break }
+        data.append(buffer, count: read)
+    }
+    return data
 }
 
 /// The smallest config `CapabilityRegistry.parseMLXConfig` accepts, so a
@@ -378,6 +395,98 @@ private let minimalConfig = """
                 Issue.record("expected manifestFailed, got \(error)")
                 return
             }
+        }
+    }
+
+    // MARK: Rung three — ollama pull, delegated
+
+    /// The happy path: the request names the model, byte progress comes from
+    /// the lines that carry numbers, and `success` ends the pull without error.
+    @Test func pullNamesTheModelStreamsProgressAndCompletes() async throws {
+        let seenMethod = Locked<String>("")
+        let seenBody = Locked<Data>(Data())
+        StubState.shared.reset(routes: [
+            "/api/pull": { request in
+                seenMethod.set(request.httpMethod ?? "")
+                seenBody.set(requestBody(request))
+                return StubResponse(status: 200, headers: [:], body: Data("""
+                {"status":"pulling manifest"}
+                {"status":"downloading sha256:abc","digest":"sha256:abc","total":100,"completed":40}
+                {"status":"downloading sha256:abc","digest":"sha256:abc","total":100,"completed":100}
+                {"status":"verifying sha256 digest"}
+                {"status":"success"}
+                """.utf8))
+            }
+        ])
+
+        let progress = ProgressRecorder()
+        try await OllamaPull.pull("qwen3:4b", session: StubHTTPProtocol.session()) { downloaded, total in
+            progress.record(downloaded, total)
+        }
+
+        #expect(seenMethod.value == "POST")
+        let asked = try JSONSerialization.jsonObject(with: seenBody.value) as? [String: String]
+        #expect(asked?["model"] == "qwen3:4b")
+
+        #expect(progress.last?.total == 100)
+        #expect(progress.last?.downloaded == 100)
+    }
+
+    /// A model that does not exist comes back as an NDJSON error line, not an
+    /// HTTP status. It fails typed, carrying the server's own wording — the
+    /// string a model-list row will show (§14.3).
+    @Test func anErrorLineFailsTypedWithTheServersOwnWording() async throws {
+        StubState.shared.reset(routes: [
+            "/api/pull": { _ in
+                StubResponse(
+                    status: 200,
+                    headers: [:],
+                    body: Data(#"{"error":"pull model manifest: file does not exist"}"#.utf8)
+                )
+            }
+        ])
+
+        do {
+            try await OllamaPull.pull("nope/ghost", session: StubHTTPProtocol.session())
+            Issue.record("A server-reported error must stop the pull")
+        } catch let error as ModelDownloadError {
+            guard case .downloadFailed(let message) = error else {
+                Issue.record("expected downloadFailed, got \(error)")
+                return
+            }
+            #expect(message.contains("file does not exist"))
+        }
+    }
+
+    /// Server down: typed failure, never a raw URLError reaching a surface.
+    @Test func anUnreachableServerFailsTypedNotRaw() async throws {
+        StubState.shared.reset(routes: [:])  // unrouted path → transport error
+
+        do {
+            try await OllamaPull.pull("qwen3:4b", session: StubHTTPProtocol.session())
+            Issue.record("An unreachable server must fail typed")
+        } catch let error as ModelDownloadError {
+            guard case .downloadFailed = error else {
+                Issue.record("expected downloadFailed, got \(error)")
+                return
+            }
+        }
+    }
+
+    @Test func aServerErrorStatusFailsBeforeAnyLineIsRead() async throws {
+        StubState.shared.reset(routes: [
+            "/api/pull": { _ in StubResponse(status: 500, headers: [:], body: Data("oops".utf8)) }
+        ])
+
+        do {
+            try await OllamaPull.pull("qwen3:4b", session: StubHTTPProtocol.session())
+            Issue.record("An HTTP error status must fail the pull")
+        } catch let error as ModelDownloadError {
+            guard case .downloadFailed(let message) = error else {
+                Issue.record("expected downloadFailed, got \(error)")
+                return
+            }
+            #expect(message.contains("500"))
         }
     }
 }
