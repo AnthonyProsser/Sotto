@@ -1,0 +1,32 @@
+#!/bin/zsh
+set -euo pipefail
+
+NIGHT_HOME="${0:A:h:h}"
+ROOT="${SOTTO_NIGHT_ROOT:-${NIGHT_HOME:h:h}}"
+export OPENCODE_CONFIG="$NIGHT_HOME/opencode.json"
+export OPENCODE_CONFIG_DIR="$NIGHT_HOME/ocdir"
+export OPENCODE_DISABLE_AUTOUPDATE=1
+
+mkdir -p "$NIGHT_HOME/state"
+MODEL="$(grep -v '^#' "$NIGHT_HOME/allowlist.txt" | grep -v '^$' | head -1)"
+REQUESTED="${1:-$MODEL}"
+
+if [[ "$REQUESTED" != "$MODEL" ]]; then
+  print -u2 "REFUSED non-allowlisted model: $REQUESTED"
+  exit 2
+fi
+
+OUT="$NIGHT_HOME/state/ping.json"
+: > "$OUT"
+
+opencode run \
+  --dir "$ROOT" \
+  --agent critic \
+  --model "$MODEL" \
+  --format json \
+  --title sotto-night-ping \
+  "Reply with the single word PONG and do nothing else. Do not use tools." \
+  > "$OUT"
+
+python3 "$NIGHT_HOME/bin/night-parse.py" check-models "$OUT" "$NIGHT_HOME/allowlist.txt"
+python3 "$NIGHT_HOME/bin/night-parse.py" require-text "$OUT" PONG

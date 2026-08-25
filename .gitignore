@@ -50,3 +50,6 @@ Secrets.plist
 
 # Coverage output from running the app from a shell
 *.profraw
+
+# Overnight supervisor runtime — event streams, test logs, ledger
+tools/night/state/

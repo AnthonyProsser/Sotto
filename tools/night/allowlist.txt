@@ -1,0 +1,3 @@
+# Only this model may run. One ID per line. Comments start with #.
+# If this model is unavailable the supervisor stops — no failover.
+opencode/x-preview-f-free

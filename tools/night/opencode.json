@@ -1,0 +1,134 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "opencode/x-preview-f-free",
+  "default_agent": "lead",
+  "share": "disabled",
+  "snapshot": true,
+  "autoupdate": false,
+  "instructions": [
+    "INSTRUCTIONS.md",
+    "../../AGENTS.md",
+    "../../.claude/rules/slices.md",
+    "../../.claude/rules/models-and-network.md"
+  ],
+  "experimental": {
+    "policies": [
+      { "effect": "deny", "action": "provider.use", "resource": "*" },
+      { "effect": "allow", "action": "provider.use", "resource": "opencode" }
+    ]
+  },
+  "permission": {
+    "external_directory": "deny",
+    "doom_loop": "deny",
+    "question": "deny",
+    "todowrite": "deny",
+    "skill": "deny",
+    "lsp": "allow",
+    "websearch": "allow",
+    "webfetch": "deny",
+    "read": {
+      "*": "allow",
+      "*.env": "deny",
+      "*.env.*": "deny",
+      "*secret*": "deny",
+      "*credentials*": "deny"
+    },
+    "edit": {
+      "*": "deny",
+      "Sotto/**/*.swift": "allow",
+      "SottoTests/**/*.swift": "allow",
+      "Sotto.xcodeproj/**": "allow",
+      "DECISIONS.md": "allow",
+      "tools/night/state/**": "allow",
+      "tools/night/MORNING-REPORT.md": "allow"
+    },
+    "bash": {
+      "*": "deny",
+      "git status*": "allow",
+      "git diff*": "allow",
+      "git log*": "allow",
+      "git show*": "allow",
+      "git rev-parse*": "allow",
+      "xcodebuild *": "allow",
+      "swift test *": "allow",
+      "git add*": "deny",
+      "git commit*": "deny",
+      "git push*": "deny",
+      "git reset*": "deny",
+      "git clean*": "deny",
+      "git checkout*": "deny",
+      "git switch*": "deny",
+      "git merge*": "deny",
+      "git rebase*": "deny",
+      "git stash*": "deny",
+      "git worktree*": "deny",
+      "gh *": "deny",
+      "rm -rf *": "deny",
+      "sudo *": "deny"
+    },
+    "task": {
+      "*": "deny",
+      "explore": "allow"
+    }
+  },
+  "agent": {
+    "build": { "disable": true },
+    "plan": { "disable": true },
+    "general": { "disable": true },
+    "scout": { "disable": true },
+    "compaction": { "model": "opencode/x-preview-f-free" },
+    "title": { "model": "opencode/x-preview-f-free" },
+    "summary": { "model": "opencode/x-preview-f-free" },
+    "lead": {
+      "description": "Overnight lead. One backend unit per turn. May invoke explore only.",
+      "mode": "primary",
+      "model": "opencode/x-preview-f-free",
+      "steps": 40,
+      "prompt": "{file:./prompts/lead.md}",
+      "permission": {
+        "task": {
+          "*": "deny",
+          "explore": "allow"
+        }
+      }
+    },
+    "critic": {
+      "description": "Independent read-only review. Supervisor invokes only.",
+      "mode": "subagent",
+      "hidden": true,
+      "model": "opencode/x-preview-f-free",
+      "steps": 20,
+      "prompt": "{file:./prompts/critic.md}",
+      "permission": {
+        "edit": "deny",
+        "task": "deny",
+        "bash": {
+          "*": "deny",
+          "git status*": "allow",
+          "git diff*": "allow",
+          "git log*": "allow",
+          "git show*": "allow"
+        }
+      }
+    },
+    "explore": {
+      "description": "Read-only map of existing Sotto code and tests.",
+      "mode": "subagent",
+      "model": "opencode/x-preview-f-free",
+      "prompt": "{file:./prompts/explore.md}",
+      "permission": {
+        "edit": "deny",
+        "bash": "deny",
+        "task": "deny"
+      }
+    }
+  },
+  "command": {
+    "night-turn": {
+      "description": "One overnight backend unit",
+      "agent": "lead",
+      "model": "opencode/x-preview-f-free",
+      "template": "{file:./prompts/night-turn.md}"
+    }
+  }
+}
