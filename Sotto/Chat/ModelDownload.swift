@@ -221,49 +221,42 @@ nonisolated enum ModelDownload {
         var handle: FileHandle?
         defer { try? handle?.close() }
 
-        var __debugEventCount = 0
-        var __debugTotal = 0
-        do {
-            for try await event in stream.events {
-                __debugEventCount += 1
-                let cancelled = Task.isCancelled
-                switch event {
-                case .status(let statusCode):
-                    FileHandle.standardError.write("DEBUG event=\(__debugEventCount) isCancelled=\(cancelled) status=\(statusCode)\n".data(using: .utf8)!)
-                    switch statusCode {
-                    case 206:
-                        break  // the server honoured the range; append to what is on disk
-                    case 200:
-                        // Full body — either a fresh download or a server that ignored the
-                        // range. Restarting the file here is what keeps resume honest.
-                        try? FileManager.default.removeItem(at: part)
-                        FileManager.default.createFile(atPath: part.path, contents: nil)
-                        progress.restart()
-                    case let other:
-                        throw ModelDownloadError.downloadFailed("\(file.name): HTTP \(other)")
-                    }
-                    if !FileManager.default.fileExists(atPath: part.path) {
-                        FileManager.default.createFile(atPath: part.path, contents: nil)
-                    }
-                    let opened = try FileHandle(forWritingTo: part)
-                    try opened.seekToEnd()
-                    handle = opened
-                case .data(let data):
-                    __debugTotal += data.count
-                    FileHandle.standardError.write("DEBUG event=\(__debugEventCount) isCancelled=\(cancelled) data=\(data.count) total=\(__debugTotal)\n".data(using: .utf8)!)
-                    try Task.checkCancellation()
-                    guard let handle else {
-                        throw ModelDownloadError.downloadFailed("\(file.name): body arrived before a response")
-                    }
-                    try handle.write(contentsOf: data)
-                    progress.receive(Int64(data.count))
+        for try await event in stream.events {
+            switch event {
+            case .status(let statusCode):
+                switch statusCode {
+                case 206:
+                    break  // the server honoured the range; append to what is on disk
+                case 200:
+                    // Full body — either a fresh download or a server that ignored the
+                    // range. Restarting the file here is what keeps resume honest.
+                    try? FileManager.default.removeItem(at: part)
+                    FileManager.default.createFile(atPath: part.path, contents: nil)
+                    progress.restart()
+                case let other:
+                    throw ModelDownloadError.downloadFailed("\(file.name): HTTP \(other)")
                 }
+                if !FileManager.default.fileExists(atPath: part.path) {
+                    FileManager.default.createFile(atPath: part.path, contents: nil)
+                }
+                let opened = try FileHandle(forWritingTo: part)
+                try opened.seekToEnd()
+                handle = opened
+            case .data(let data):
+                guard let handle else {
+                    throw ModelDownloadError.downloadFailed("\(file.name): body arrived before a response")
+                }
+                try handle.write(contentsOf: data)
+                progress.receive(Int64(data.count))
             }
-        } catch {
-            FileHandle.standardError.write("DEBUG loop threw after \(__debugEventCount) events, total=\(__debugTotal): \(error)\n".data(using: .utf8)!)
-            throw error
         }
-        FileHandle.standardError.write("DEBUG loop finished normally after \(__debugEventCount) events, total=\(__debugTotal)\n".data(using: .utf8)!)
+        // `AsyncThrowingStream` finishes silently — no error, no terminal
+        // element — when the awaiting task is cancelled, indistinguishable
+        // from here to the server genuinely closing the connection. Checking
+        // now, before anything below reads `handle` or touches `part`, is
+        // what turns a cancelled loop into `CancellationError` instead of a
+        // truncated body sailing through to verification and promotion.
+        try Task.checkCancellation()
         guard handle != nil else {
             throw ModelDownloadError.downloadFailed("\(file.name): the connection closed without a response")
         }
@@ -385,11 +378,6 @@ private final class ChunkStream: NSObject, URLSessionDataDelegate, @unchecked Se
         events = AsyncThrowingStream(bufferingPolicy: .unbounded) { continuation = $0 }
         self.continuation = continuation
         super.init()
-        FileHandle.standardError.write("DEBUG ChunkStream init \(ObjectIdentifier(self))\n".data(using: .utf8)!)
-    }
-
-    deinit {
-        FileHandle.standardError.write("DEBUG ChunkStream DEINIT \(ObjectIdentifier(self))\n".data(using: .utf8)!)
     }
 
     func urlSession(
@@ -402,18 +390,11 @@ private final class ChunkStream: NSObject, URLSessionDataDelegate, @unchecked Se
         continuation.yield(.status((response as? HTTPURLResponse)?.statusCode ?? 0))
     }
 
-    var __debugYieldCount = 0
-    var __debugYieldTotal = 0
-
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
-        __debugYieldCount += 1
-        __debugYieldTotal += data.count
-        FileHandle.standardError.write("DEBUG yield=\(__debugYieldCount) bytes=\(data.count) total=\(__debugYieldTotal) thread=\(Thread.current)\n".data(using: .utf8)!)
         continuation.yield(.data(data))
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
-        FileHandle.standardError.write("DEBUG didComplete afterYields=\(__debugYieldCount) totalYielded=\(__debugYieldTotal) error=\(String(describing: error)) thread=\(Thread.current)\n".data(using: .utf8)!)
         if let error = error as NSError?, error.code == NSURLErrorCancelled {
             continuation.finish(throwing: CancellationError())
         } else if let error {

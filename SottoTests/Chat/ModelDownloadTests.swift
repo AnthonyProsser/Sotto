@@ -443,32 +443,6 @@ private let minimalConfig = """
         ), "a cancelled fetch must not promote a truncated body past the .part stage")
     }
 
-    @Test func __debugLargeStubNoCancellation() async throws {
-        let root = tempRoot()
-        defer { try? FileManager.default.removeItem(at: root) }
-
-        let weights = randomBytes(20_000_000)
-        let config = Data(minimalConfig.utf8)
-
-        StubState.shared.reset(routes: [
-            "/api/models/acme/tiny": { _ in
-                StubResponse(status: 200, headers: [:], body: Data(manifestJSON(siblings: [
-                    siblingJSON(name: "config.json", size: config.count),
-                    siblingJSON(name: "model.safetensors", size: weights.count, sha256: sha256Hex(weights))
-                ]).utf8))
-            },
-            "/acme/tiny/resolve/main/config.json": { _ in
-                StubResponse(status: 200, headers: [:], body: config)
-            },
-            "/acme/tiny/resolve/main/model.safetensors": { _ in
-                StubResponse(status: 200, headers: [:], body: weights, chunks: 2000)
-            }
-        ])
-
-        let model = try await ModelDownload.acquire("acme/tiny", into: root, session: StubHTTPProtocol.session())
-        #expect(model.weightsBytes == Int64(weights.count))
-    }
-
     @Test func discardsACorruptPayloadInsteadOfKeepingIt() async throws {
         let root = tempRoot()
         defer { try? FileManager.default.removeItem(at: root) }
