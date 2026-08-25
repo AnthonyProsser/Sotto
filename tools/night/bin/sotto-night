@@ -17,6 +17,7 @@ MODEL="$(grep -v '^#' "$ALLOW" | grep -v '^$' | head -1)"
 export OPENCODE_CONFIG="$NIGHT_HOME/opencode.json"
 export OPENCODE_CONFIG_DIR="$NIGHT_HOME/ocdir"
 export OPENCODE_DISABLE_AUTOUPDATE=1
+export DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}"
 
 CODE_STOP="${SOTTO_NIGHT_CODE_STOP:-2026-08-25 05:35:00}"
 HARD_STOP="${SOTTO_NIGHT_HARD_STOP:-2026-08-25 06:00:00}"
