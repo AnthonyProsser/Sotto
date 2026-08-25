@@ -121,6 +121,26 @@
         "bash": "deny",
         "task": "deny"
       }
+    },
+    "ping": {
+      "description": "Cheap free-model probe. No tools.",
+      "mode": "primary",
+      "hidden": true,
+      "model": "opencode/x-preview-f-free",
+      "steps": 3,
+      "prompt": "Reply with the single word PONG. Do not use tools.",
+      "permission": {
+        "edit": "deny",
+        "bash": "deny",
+        "task": "deny",
+        "websearch": "deny",
+        "webfetch": "deny",
+        "read": "deny",
+        "glob": "deny",
+        "grep": "deny",
+        "list": "deny",
+        "lsp": "deny"
+      }
     }
   },
   "command": {

@@ -19,14 +19,28 @@ fi
 OUT="$NIGHT_HOME/state/ping.json"
 : > "$OUT"
 
-opencode run \
-  --dir "$ROOT" \
-  --agent critic \
-  --model "$MODEL" \
-  --format json \
-  --title sotto-night-ping \
-  "Reply with the single word PONG and do nothing else. Do not use tools." \
-  > "$OUT"
+python3 - "$ROOT" "$MODEL" "$OUT" <<'PY'
+import subprocess, sys
+root, model, out = sys.argv[1], sys.argv[2], sys.argv[3]
+cmd = [
+    "opencode", "run",
+    "--dir", root,
+    "--agent", "ping",
+    "--model", model,
+    "--format", "json",
+    "--title", "sotto-night-ping",
+    "Reply with the single word PONG and do nothing else. Do not use tools.",
+]
+with open(out, "w") as fh:
+    try:
+        proc = subprocess.run(cmd, stdout=fh, stderr=subprocess.PIPE, text=True, timeout=180)
+    except subprocess.TimeoutExpired:
+        print("ping timed out after 180s", file=sys.stderr)
+        sys.exit(5)
+if proc.returncode != 0:
+    print(proc.stderr[-4000:] if proc.stderr else "opencode ping failed", file=sys.stderr)
+    sys.exit(proc.returncode or 1)
+PY
 
 python3 "$NIGHT_HOME/bin/night-parse.py" check-models "$OUT" "$NIGHT_HOME/allowlist.txt"
 python3 "$NIGHT_HOME/bin/night-parse.py" require-text "$OUT" PONG

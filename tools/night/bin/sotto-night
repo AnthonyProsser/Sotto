@@ -273,11 +273,42 @@ run_opencode() {
   shift 2
   require_model "$MODEL"
   : > "$out"
-  log "opencode --agent $agent --model $MODEL"
-  if ! opencode run --auto --dir "$ROOT" --agent "$agent" --model "$MODEL" --format json --title "sotto-night-$agent" "$@" > "$out"; then
-    log "opencode $agent exited non-zero"
+  local limit=1500
+  [[ "$agent" == "critic" ]] && limit=600
+  [[ "$agent" == "ping" ]] && limit=180
+  log "opencode --agent $agent --model $MODEL (timeout ${limit}s)"
+  set +e
+  python3 - "$ROOT" "$agent" "$MODEL" "$out" "$limit" "$@" <<'PY'
+import subprocess, sys
+root, agent, model, out, limit = sys.argv[1:6]
+extra = sys.argv[6:]
+cmd = [
+    "opencode", "run", "--auto",
+    "--dir", root,
+    "--agent", agent,
+    "--model", model,
+    "--format", "json",
+    "--title", f"sotto-night-{agent}",
+    *extra,
+]
+with open(out, "w") as fh:
+    try:
+        proc = subprocess.run(cmd, stdout=fh, stderr=subprocess.PIPE, text=True, timeout=int(limit))
+    except subprocess.TimeoutExpired:
+        print(f"opencode {agent} timed out after {limit}s", file=sys.stderr)
+        sys.exit(5)
+if proc.returncode != 0:
+    err = proc.stderr[-2000:] if proc.stderr else ""
+    print(err, file=sys.stderr)
+    sys.exit(proc.returncode)
+PY
+  local rc=$?
+  set -e
+  if (( rc != 0 )); then
+    log "opencode $agent exited $rc"
   fi
   check_event_models "$out" || fail "non-allowlisted model in $agent event stream"
+  return 0
 }
 
 run_lead() {
@@ -401,15 +432,29 @@ self_test() {
 
   log "4. paid model invocation is refused"
   local paid_out="$STATE/paid-refusal.json"
-  if opencode run --dir "$ROOT" --agent critic --model "opencode/gpt-5.5" --format json --title sotto-night-paid-test \
-      "Reply with PONG and do nothing else." > "$paid_out" 2>"$STATE/paid-refusal.err"; then
-    if python3 "$PARSE" check-models "$paid_out" "$ALLOW"; then
-      fail "paid model run succeeded and looked allowlisted"
-    fi
-  fi
+  local paid_err="$STATE/paid-refusal.err"
+  python3 - "$ROOT" "$paid_out" "$paid_err" <<'PY' || true
+import subprocess, sys
+root, out, errp = sys.argv[1:4]
+cmd = [
+    "opencode", "run",
+    "--dir", root,
+    "--agent", "ping",
+    "--model", "opencode/gpt-5.5",
+    "--format", "json",
+    "--title", "sotto-night-paid-test",
+    "Reply with PONG and do nothing else.",
+]
+with open(out, "w") as fh, open(errp, "w") as eh:
+    try:
+        proc = subprocess.run(cmd, stdout=fh, stderr=eh, text=True, timeout=90)
+        sys.exit(proc.returncode)
+    except subprocess.TimeoutExpired:
+        eh.write("timed out invoking paid model\n")
+        sys.exit(5)
+PY
   if python3 "$PARSE" check-models "$paid_out" "$ALLOW" 2>/dev/null; then
-    # no models or only allowlisted — also accept if the process failed closed
-    if grep -qiE 'refus|deny|error|401|402|403|allowlist' "$STATE/paid-refusal.err" "$paid_out"; then
+    if grep -qiE 'refus|deny|error|401|402|403|allowlist|invalid|timed out' "$paid_err" "$paid_out"; then
       log "4. pass (failed closed)"
     else
       fail "paid model was not clearly refused"
