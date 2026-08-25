@@ -112,6 +112,9 @@
 			);
 			name = Sotto;
 			packageProductDependencies = (
+				A17E0010MLXLLM00000001 /* MLXLLM */,
+				A17E0011MLXLMCOMMON0001 /* MLXLMCommon */,
+				A17E0012MLX0000000000001 /* MLX */,
 			);
 			productName = Sotto;
 			productReference = 19C559123030CCA800DD8AE4 /* Sotto.app */;
@@ -197,6 +200,10 @@
 			minimizedProjectReferenceProxies = 1;
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 19C559133030CCA800DD8AE4 /* Products */;
+			packageReferences = (
+				A17E0001MLXEXAMPLES0001 /* XCRemoteSwiftPackageReference "mlx-swift-examples" */,
+				A17E0002MLXSWIFT00000001 /* XCRemoteSwiftPackageReference "mlx-swift" */,
+			);
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
@@ -571,6 +578,44 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		A17E0001MLXEXAMPLES0001 /* XCRemoteSwiftPackageReference "mlx-swift-examples" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/ml-explore/mlx-swift-examples.git";
+			requirement = {
+				kind = upToNextMinorVersion;
+				minimumVersion = 2.29.1;
+			};
+		};
+		A17E0002MLXSWIFT00000001 /* XCRemoteSwiftPackageReference "mlx-swift" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/ml-explore/mlx-swift.git";
+			requirement = {
+				kind = upToNextMinorVersion;
+				minimumVersion = 0.29.1;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		A17E0010MLXLLM00000001 /* MLXLLM */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A17E0001MLXEXAMPLES0001 /* XCRemoteSwiftPackageReference "mlx-swift-examples" */;
+			productName = MLXLLM;
+		};
+		A17E0011MLXLMCOMMON0001 /* MLXLMCommon */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A17E0001MLXEXAMPLES0001 /* XCRemoteSwiftPackageReference "mlx-swift-examples" */;
+			productName = MLXLMCommon;
+		};
+		A17E0012MLX0000000000001 /* MLX */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A17E0002MLXSWIFT00000001 /* XCRemoteSwiftPackageReference "mlx-swift" */;
+			productName = MLX;
+		};
+/* End XCSwiftPackageProductDependency section */
+
 	};
 	rootObject = 19C5590A3030CCA800DD8AE4 /* Project object */;
 }
