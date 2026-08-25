@@ -20,6 +20,9 @@ private struct StubResponse: Sendable {
     var status: Int
     var headers: [String: String]
     var body: Data
+    /// How many `didLoad` deliveries the body is split into, so byte-level
+    /// transport behaviour has more than one chunk to work with.
+    var chunks: Int = 1
 }
 
 private typealias Route = @Sendable (URLRequest) -> StubResponse
@@ -62,7 +65,17 @@ private final class StubHTTPProtocol: URLProtocol {
             headerFields: response.headers
         )!
         client?.urlProtocol(self, didReceive: http, cacheStoragePolicy: .notAllowed)
-        client?.urlProtocol(self, didLoad: response.body)
+        if response.chunks <= 1 {
+            client?.urlProtocol(self, didLoad: response.body)
+        } else {
+            let size = max(1, response.body.count / response.chunks)
+            var offset = 0
+            while offset < response.body.count {
+                let end = min(offset + size, response.body.count)
+                client?.urlProtocol(self, didLoad: response.body.subdata(in: offset..<end))
+                offset = end
+            }
+        }
         client?.urlProtocolDidFinishLoading(self)
     }
 
@@ -113,13 +126,22 @@ private final class Locked<Value>: @unchecked Sendable {
 private final class ProgressRecorder: @unchecked Sendable {
     private let lock = NSLock()
     private var _last: (downloaded: Int64, total: Int64)?
+    private var _all: [(downloaded: Int64, total: Int64)] = []
 
     func record(_ downloaded: Int64, _ total: Int64) {
-        lock.lock(); _last = (downloaded, total); lock.unlock()
+        lock.lock()
+        _last = (downloaded, total)
+        _all.append((downloaded, total))
+        lock.unlock()
     }
 
     var last: (downloaded: Int64, total: Int64)? {
         lock.lock(); defer { lock.unlock() }; return _last
+    }
+
+    /// Every report in arrival order — what byte-level granularity is asserted against.
+    var all: [(downloaded: Int64, total: Int64)] {
+        lock.lock(); defer { lock.unlock() }; return _all
     }
 }
 
@@ -251,6 +273,83 @@ private let minimalConfig = """
         #expect(progress.last?.downloaded == total)
     }
 
+    /// The transport delivers buffers, so progress moves inside a file rather
+    /// than jumping 0 % → 100 % on a single-shard repo.
+    @Test func progressAdvancesPerChunkInsideAFile() async throws {
+        let root = tempRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let weights = randomBytes(4096)
+        let config = Data(minimalConfig.utf8)
+
+        StubState.shared.reset(routes: [
+            "/api/models/acme/tiny": { _ in
+                StubResponse(status: 200, headers: [:], body: Data(manifestJSON(siblings: [
+                    siblingJSON(name: "config.json", size: config.count),
+                    siblingJSON(name: "model.safetensors", size: weights.count, sha256: sha256Hex(weights))
+                ]).utf8))
+            },
+            "/acme/tiny/resolve/main/config.json": { _ in
+                StubResponse(status: 200, headers: [:], body: config)
+            },
+            "/acme/tiny/resolve/main/model.safetensors": { _ in
+                StubResponse(status: 200, headers: [:], body: weights, chunks: 8)
+            }
+        ])
+
+        let progress = ProgressRecorder()
+        _ = try await ModelDownload.acquire(
+            "acme/tiny",
+            into: root,
+            session: StubHTTPProtocol.session()
+        ) { downloaded, total in
+            progress.record(downloaded, total)
+        }
+
+        let total = Int64(config.count + weights.count)
+        #expect(progress.last?.total == total)
+        #expect(progress.last?.downloaded == total)
+        #expect(progress.all.contains { $0.downloaded > 0 && $0.downloaded < total })
+    }
+
+    /// File URLs pin `resolve/<sha>` — the snapshot the manifest came from —
+    /// not the moving `main` ref. These routes only exist under the sha, so a
+    /// resolve/main request fails the acquisition outright.
+    @Test func fileRequestsPinTheManifestSnapshotSha() async throws {
+        let root = tempRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let weights = randomBytes(1024)
+        let config = Data(minimalConfig.utf8)
+        let sha = "3f2a" + String(repeating: "b", count: 36)
+
+        StubState.shared.reset(routes: [
+            "/api/models/acme/tiny": { _ in
+                StubResponse(
+                    status: 200,
+                    headers: [:],
+                    body: Data("""
+                    {"sha":"\(sha)","siblings":[\( [
+                        siblingJSON(name: "config.json", size: config.count),
+                        siblingJSON(name: "model.safetensors", size: weights.count, sha256: sha256Hex(weights))
+                    ].joined(separator: ",") )]}
+                    """.utf8)
+                )
+            },
+            "/acme/tiny/resolve/\(sha)/config.json": { _ in
+                StubResponse(status: 200, headers: [:], body: config)
+            },
+            "/acme/tiny/resolve/\(sha)/model.safetensors": { _ in
+                StubResponse(status: 200, headers: [:], body: weights)
+            }
+        ])
+
+        let model = try await ModelDownload.acquire("acme/tiny", into: root, session: StubHTTPProtocol.session())
+
+        #expect(model.id == "tiny")
+        #expect(try Data(contentsOf: root.appending(path: "tiny/model.safetensors")) == weights)
+    }
+
     /// The cross-launch case: a `.part` left behind by a quit mid-download is
     /// appended to over a Range request, never duplicated and never restarted.
     @Test func resumesAPartAcrossLaunchesWithoutDuplicatingIt() async throws {
@@ -283,6 +382,91 @@ private let minimalConfig = """
         #expect(resumed.value)
         let assembled = try Data(contentsOf: root.appending(path: "tiny/model.safetensors"))
         #expect(assembled == weights)
+    }
+
+    /// Cancelling mid-file must leave a resumable `.part`, not run the rest of
+    /// `fetch` to completion against a truncated body. Many small chunks so a
+    /// cancel fired after the first handful lands mid-stream, not at the end.
+    @Test func cancellingMidFileLeavesAResumablePartInsteadOfVerifying() async throws {
+        let root = tempRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let weights = randomBytes(20_000_000)
+        let config = Data(minimalConfig.utf8)
+
+        StubState.shared.reset(routes: [
+            "/api/models/acme/tiny": { _ in
+                StubResponse(status: 200, headers: [:], body: Data(manifestJSON(siblings: [
+                    siblingJSON(name: "config.json", size: config.count),
+                    siblingJSON(name: "model.safetensors", size: weights.count, sha256: sha256Hex(weights))
+                ]).utf8))
+            },
+            "/acme/tiny/resolve/main/config.json": { _ in
+                StubResponse(status: 200, headers: [:], body: config)
+            },
+            "/acme/tiny/resolve/main/model.safetensors": { _ in
+                StubResponse(status: 200, headers: [:], body: weights, chunks: 2000)
+            }
+        ])
+
+        let progress = ProgressRecorder()
+        let job = Task {
+            try await ModelDownload.acquire(
+                "acme/tiny",
+                into: root,
+                session: StubHTTPProtocol.session()
+            ) { downloaded, total in
+                progress.record(downloaded, total)
+            }
+        }
+
+        // Give the transfer room to get partway into the shard, then cancel.
+        while (progress.last?.downloaded ?? 0) < 2_000_000 {
+            try await Task.sleep(for: .milliseconds(1))
+        }
+        job.cancel()
+
+        do {
+            _ = try await job.value
+            Issue.record("cancelling mid-file must not let the acquisition complete")
+        } catch is CancellationError {
+            // expected
+        } catch {
+            Issue.record("expected CancellationError, got \(error)")
+        }
+
+        let part = root.appending(path: ".incomplete-tiny/model.safetensors.part")
+        let partSize = (try? FileManager.default.attributesOfItem(atPath: part.path)[.size] as? Int64) ?? nil
+        #expect((partSize ?? 0) > 0, "cancelling mid-file dropped the .part instead of leaving it resumable")
+        #expect(!FileManager.default.fileExists(
+            atPath: root.appending(path: ".incomplete-tiny/model.safetensors").path
+        ), "a cancelled fetch must not promote a truncated body past the .part stage")
+    }
+
+    @Test func __debugLargeStubNoCancellation() async throws {
+        let root = tempRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let weights = randomBytes(20_000_000)
+        let config = Data(minimalConfig.utf8)
+
+        StubState.shared.reset(routes: [
+            "/api/models/acme/tiny": { _ in
+                StubResponse(status: 200, headers: [:], body: Data(manifestJSON(siblings: [
+                    siblingJSON(name: "config.json", size: config.count),
+                    siblingJSON(name: "model.safetensors", size: weights.count, sha256: sha256Hex(weights))
+                ]).utf8))
+            },
+            "/acme/tiny/resolve/main/config.json": { _ in
+                StubResponse(status: 200, headers: [:], body: config)
+            },
+            "/acme/tiny/resolve/main/model.safetensors": { _ in
+                StubResponse(status: 200, headers: [:], body: weights, chunks: 2000)
+            }
+        ])
+
+        let model = try await ModelDownload.acquire("acme/tiny", into: root, session: StubHTTPProtocol.session())
+        #expect(model.weightsBytes == Int64(weights.count))
     }
 
     @Test func discardsACorruptPayloadInsteadOfKeepingIt() async throws {

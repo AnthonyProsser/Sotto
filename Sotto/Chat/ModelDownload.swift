@@ -31,6 +31,10 @@ nonisolated enum ModelDownloadError: LocalizedError, Equatable {
 /// pressed. No background re-download and no auto-update; acquiring a repo
 /// that is already on disk returns what is on disk.
 ///
+/// Files are fetched from `resolve/<commit-sha>` — the same snapshot the
+/// manifest came from — rather than the moving `resolve/main` ref, so the
+/// bytes and the hashes they are checked against cannot disagree.
+///
 /// Resume shape is the stitcher's (§10.3): each file lands as `<name>.part`
 /// and appends across launches via an HTTP `Range` request, so cancelling or
 /// quitting keeps progress (a server that answers `200` to the range restarts
@@ -43,7 +47,7 @@ nonisolated enum ModelDownloadError: LocalizedError, Equatable {
 nonisolated enum ModelDownload {
     private static let log = Logger(subsystem: "com.anthonyprosser.Sotto", category: "model-download")
 
-    /// Chunk size for streaming reads, writes, and hashing.
+    /// Read size when hashing a file for verification.
     private static let chunkBytes = 1 << 20
 
     typealias ProgressHandler = @Sendable (_ downloadedBytes: Int64, _ totalBytes: Int64) -> Void
@@ -62,6 +66,9 @@ nonisolated enum ModelDownload {
     /// configs, tokenizer — never `README.md` or git metadata.
     nonisolated struct Manifest: Sendable, Equatable {
         let repoID: String
+        /// The commit the file list came from. File URLs pin this so a push to
+        /// the repo mid-download cannot swap bytes under verified hashes.
+        let revision: String
         let files: [RemoteFile]
 
         var totalBytes: Int64 { files.reduce(0) { $0 + ($1.size ?? 0) } }
@@ -95,16 +102,16 @@ nonisolated enum ModelDownload {
             throw ModelDownloadError.manifestFailed("\(repoID) has no MLX-loadable files")
         }
 
-        return Manifest(repoID: repoID, files: files)
+        return Manifest(repoID: repoID, revision: dto.sha ?? "main", files: files)
     }
 
     // MARK: - Acquisition
 
     /// Acquires `repoID` into `root` and returns it as a loadable model.
     ///
-    /// Progress is reported after each file lands; a repo's few multi-GB shards
-    /// make finer granularity a concern of the surface that displays it, which
-    /// can move the call into the byte loop when pixels exist to justify it.
+    /// Progress advances with every network chunk across the whole repo,
+    /// seeded from what is already on disk — verified copies and resumable
+    /// `.part` prefixes — against the manifest's total.
     @discardableResult
     static func acquire(
         _ repoID: String,
@@ -135,15 +142,19 @@ nonisolated enum ModelDownload {
         let staging = root.appending(path: ".incomplete-\(name)")
         try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
 
-        let total = manifest.totalBytes
-        var downloaded: Int64 = 0
-        progress?(downloaded, total)
+        let tally = RepoProgress(total: manifest.totalBytes, handler: progress)
+        tally.report()
 
         for file in manifest.files {
             try Task.checkCancellation()
-            try await fetch(file, repoID: repoID, staging: staging, session: session)
-            downloaded += file.size ?? 0
-            progress?(downloaded, total)
+            try await fetch(
+                file,
+                repoID: repoID,
+                revision: manifest.revision,
+                staging: staging,
+                session: session,
+                progress: tally
+            )
         }
 
         try FileManager.default.moveItem(at: staging, to: finalDirectory)
@@ -158,8 +169,10 @@ nonisolated enum ModelDownload {
     private static func fetch(
         _ file: RemoteFile,
         repoID: String,
+        revision: String,
         staging: URL,
-        session: URLSession
+        session: URLSession,
+        progress: RepoProgress
     ) async throws {
         let destination = staging.appending(path: file.name)
         try FileManager.default.createDirectory(
@@ -170,7 +183,10 @@ nonisolated enum ModelDownload {
         // A complete copy left by an interruption between verify and promote is
         // checked, not redownloaded.
         if FileManager.default.fileExists(atPath: destination.path) {
-            if verifies(file, at: destination) { return }
+            if verifies(file, at: destination) {
+                progress.credit(file.size ?? byteCount(of: destination))
+                return
+            }
             log.notice("Discarding corrupt \(file.name, privacy: .public)")
             try? FileManager.default.removeItem(at: destination)
         }
@@ -178,7 +194,7 @@ nonisolated enum ModelDownload {
         let part = destination.appendingPathExtension("part")
         let resumeFrom = byteCount(of: part)
 
-        guard let url = URL(string: "https://huggingface.co/\(repoID)/resolve/main/\(file.name)") else {
+        guard let url = URL(string: "https://huggingface.co/\(repoID)/resolve/\(revision)/\(file.name)") else {
             throw ModelDownloadError.downloadFailed("Not a valid file path: \(file.name)")
         }
         var request = URLRequest(url: url)
@@ -186,41 +202,73 @@ nonisolated enum ModelDownload {
             request.setValue("bytes=\(resumeFrom)-", forHTTPHeaderField: "Range")
         }
 
-        let (bytes, response) = try await session.bytes(for: request)
-        switch (response as? HTTPURLResponse)?.statusCode ?? 0 {
-        case 206:
-            break  // the server honoured the range; append to what is on disk
-        case 200:
-            // Full body — either a fresh download or a server that ignored the
-            // range. Restarting the file here is what keeps resume honest.
-            try? FileManager.default.removeItem(at: part)
-            FileManager.default.createFile(atPath: part.path, contents: nil)
-        case let status:
-            throw ModelDownloadError.downloadFailed("\(file.name): HTTP \(status)")
+        // Credit the on-disk prefix before the first chunk lands; a `200`
+        // answer below rewinds it, because the file has started over.
+        progress.begin(bytesOnDisk: resumeFrom)
+
+        let stream = ChunkStream()
+        // A delegate-driven data task delivers buffers, where `AsyncBytes`
+        // resumes once per byte. Cloning the caller session's configuration
+        // keeps injected `URLProtocol`s — the hermetic test stub — in force.
+        let transport = URLSession(configuration: session.configuration, delegate: stream, delegateQueue: nil)
+        let task = transport.dataTask(with: request)
+        task.resume()
+        defer {
+            task.cancel()
+            transport.finishTasksAndInvalidate()
         }
 
-        if !FileManager.default.fileExists(atPath: part.path) {
-            FileManager.default.createFile(atPath: part.path, contents: nil)
-        }
-        let handle = try FileHandle(forWritingTo: part)
-        defer { try? handle.close() }
-        try handle.seekToEnd()
+        var handle: FileHandle?
+        defer { try? handle?.close() }
 
-        // AsyncBytes has no chunked read, so buffer to `chunkBytes` here: one
-        // write syscall per megabyte instead of per byte.
-        var buffer = [UInt8]()
-        buffer.reserveCapacity(chunkBytes)
-        for try await byte in bytes {
-            try Task.checkCancellation()
-            buffer.append(byte)
-            if buffer.count >= chunkBytes {
-                try handle.write(contentsOf: Data(buffer))
-                buffer.removeAll(keepingCapacity: true)
+        var __debugEventCount = 0
+        var __debugTotal = 0
+        do {
+            for try await event in stream.events {
+                __debugEventCount += 1
+                let cancelled = Task.isCancelled
+                switch event {
+                case .status(let statusCode):
+                    FileHandle.standardError.write("DEBUG event=\(__debugEventCount) isCancelled=\(cancelled) status=\(statusCode)\n".data(using: .utf8)!)
+                    switch statusCode {
+                    case 206:
+                        break  // the server honoured the range; append to what is on disk
+                    case 200:
+                        // Full body — either a fresh download or a server that ignored the
+                        // range. Restarting the file here is what keeps resume honest.
+                        try? FileManager.default.removeItem(at: part)
+                        FileManager.default.createFile(atPath: part.path, contents: nil)
+                        progress.restart()
+                    case let other:
+                        throw ModelDownloadError.downloadFailed("\(file.name): HTTP \(other)")
+                    }
+                    if !FileManager.default.fileExists(atPath: part.path) {
+                        FileManager.default.createFile(atPath: part.path, contents: nil)
+                    }
+                    let opened = try FileHandle(forWritingTo: part)
+                    try opened.seekToEnd()
+                    handle = opened
+                case .data(let data):
+                    __debugTotal += data.count
+                    FileHandle.standardError.write("DEBUG event=\(__debugEventCount) isCancelled=\(cancelled) data=\(data.count) total=\(__debugTotal)\n".data(using: .utf8)!)
+                    try Task.checkCancellation()
+                    guard let handle else {
+                        throw ModelDownloadError.downloadFailed("\(file.name): body arrived before a response")
+                    }
+                    try handle.write(contentsOf: data)
+                    progress.receive(Int64(data.count))
+                }
             }
+        } catch {
+            FileHandle.standardError.write("DEBUG loop threw after \(__debugEventCount) events, total=\(__debugTotal): \(error)\n".data(using: .utf8)!)
+            throw error
         }
-        if !buffer.isEmpty {
-            try handle.write(contentsOf: Data(buffer))
+        FileHandle.standardError.write("DEBUG loop finished normally after \(__debugEventCount) events, total=\(__debugTotal)\n".data(using: .utf8)!)
+        guard handle != nil else {
+            throw ModelDownloadError.downloadFailed("\(file.name): the connection closed without a response")
         }
+        try? handle?.close()
+        handle = nil
 
         try? FileManager.default.removeItem(at: destination)
         try FileManager.default.moveItem(at: part, to: destination)
@@ -229,6 +277,7 @@ nonisolated enum ModelDownload {
             try? FileManager.default.removeItem(at: destination)
             throw ModelDownloadError.integrityFailed("\(file.name) does not match the source manifest")
         }
+        progress.finishFile()
     }
 
     /// Size always; SHA-256 whenever the manifest carries an LFS oid.
@@ -241,9 +290,12 @@ nonisolated enum ModelDownload {
 
     // MARK: - Helpers
 
-    /// Extensions an MLX load reads: weights, configs, and tokenizer data
-    /// (`tokenizer.model` ships with a `.model` extension).
-    private static let loadableExtensions: Set<String> = ["safetensors", "json", "jinja", "model"]
+    /// Extensions an MLX load reads: weights (`.safetensors`, and `.npz` for
+    /// older mlx-lm conversions), configs, and tokenizer data — `tokenizer.model`
+    /// ships with a `.model` extension, `merges.txt` / `vocab.txt` as `.txt`.
+    private static let loadableExtensions: Set<String> = [
+        "safetensors", "json", "jinja", "model", "txt", "npz",
+    ]
 
     private static func sha256Hex(of url: URL) throws -> String {
         let handle = try FileHandle(forReadingFrom: url)
@@ -260,11 +312,114 @@ nonisolated enum ModelDownload {
         return attributes?[.size] as? Int64 ?? 0
     }
 
-    private static func decode<T: Decodable>(_ type: T.Type, from data: Data) throws -> T {
+    private static func decode<T: Decodable>(_ type: T.Type, from: Data) throws -> T {
         do {
-            return try JSONDecoder().decode(T.self, from: data)
+            return try JSONDecoder().decode(type, from: from)
         } catch {
             throw ModelDownloadError.manifestFailed("Unreadable manifest: \(error.localizedDescription)")
+        }
+    }
+}
+
+/// Byte-level progress across a whole repo: what is on disk when each file
+/// starts, plus every chunk that arrives, against the manifest's total.
+private final class RepoProgress: @unchecked Sendable {
+    private let lock = NSLock()
+    private let total: Int64
+    private let handler: ModelDownload.ProgressHandler?
+    private var settled: Int64 = 0
+    private var inFlight: Int64 = 0
+
+    init(total: Int64, handler: ModelDownload.ProgressHandler?) {
+        self.total = total
+        self.handler = handler
+    }
+
+    func report() {
+        handler?(settled + inFlight, total)
+    }
+
+    /// Credits a file that needed no fetching — already verified on disk.
+    func credit(_ bytes: Int64) {
+        lock.lock(); settled += bytes; lock.unlock()
+        report()
+    }
+
+    /// Opens a file for fetching, crediting its on-disk `.part` prefix.
+    func begin(bytesOnDisk: Int64) {
+        lock.lock(); inFlight = bytesOnDisk; lock.unlock()
+        report()
+    }
+
+    /// A `200` answer restarted the file: the credited prefix is gone.
+    func restart() {
+        lock.lock(); inFlight = 0; lock.unlock()
+        report()
+    }
+
+    func receive(_ count: Int64) {
+        lock.lock(); inFlight += count; lock.unlock()
+        report()
+    }
+
+    /// Closes a finished file: its bytes join the settled tally.
+    func finishFile() {
+        lock.lock(); settled += inFlight; inFlight = 0; lock.unlock()
+        report()
+    }
+}
+
+/// Bridges one `URLSessionDataTask` into an async stream of status-plus-body-
+/// chunk events, replacing the per-byte resume cost of `URLSession.AsyncBytes`.
+private final class ChunkStream: NSObject, URLSessionDataDelegate, @unchecked Sendable {
+    enum Event: Sendable {
+        case status(Int)
+        case data(Data)
+    }
+
+    let events: AsyncThrowingStream<Event, Error>
+    private var continuation: AsyncThrowingStream<Event, Error>.Continuation!
+
+    override init() {
+        var continuation: AsyncThrowingStream<Event, Error>.Continuation!
+        events = AsyncThrowingStream(bufferingPolicy: .unbounded) { continuation = $0 }
+        self.continuation = continuation
+        super.init()
+        FileHandle.standardError.write("DEBUG ChunkStream init \(ObjectIdentifier(self))\n".data(using: .utf8)!)
+    }
+
+    deinit {
+        FileHandle.standardError.write("DEBUG ChunkStream DEINIT \(ObjectIdentifier(self))\n".data(using: .utf8)!)
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        dataTask: URLSessionDataTask,
+        didReceive response: URLResponse,
+        completionHandler: @escaping (URLSession.ResponseDisposition) -> Void
+    ) {
+        completionHandler(.allow)
+        continuation.yield(.status((response as? HTTPURLResponse)?.statusCode ?? 0))
+    }
+
+    var __debugYieldCount = 0
+    var __debugYieldTotal = 0
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+        __debugYieldCount += 1
+        __debugYieldTotal += data.count
+        FileHandle.standardError.write("DEBUG yield=\(__debugYieldCount) bytes=\(data.count) total=\(__debugYieldTotal) thread=\(Thread.current)\n".data(using: .utf8)!)
+        continuation.yield(.data(data))
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        FileHandle.standardError.write("DEBUG didComplete afterYields=\(__debugYieldCount) totalYielded=\(__debugYieldTotal) error=\(String(describing: error)) thread=\(Thread.current)\n".data(using: .utf8)!)
+        if let error = error as NSError?, error.code == NSURLErrorCancelled {
+            continuation.finish(throwing: CancellationError())
+        } else if let error {
+            continuation.finish(throwing: error)
+        } else {
+            continuation.finish()
         }
     }
 }
@@ -290,5 +445,7 @@ private nonisolated struct ManifestDTO: Decodable {
         let size: Int64?
     }
 
+    /// The commit the snapshot was taken at; pins `resolve/<sha>` for files.
+    let sha: String?
     let siblings: [Sibling]?
 }
