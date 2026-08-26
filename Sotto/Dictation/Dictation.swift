@@ -126,9 +126,6 @@ final class Dictation {
         // Already on screen and composited if the armed window ran; this is the
         // alpha change and nothing else.
         HUDPanel.shared.show(.recording(level: 0))
-        // The seam. Slice 11 fills it; firing it here costs nothing and saves the
-        // first dictation of every session ~3.5 s.
-        Cleanup.shared.prewarm()
 
         let stream: AsyncStream<AnalyzerInput>
         if let armed {

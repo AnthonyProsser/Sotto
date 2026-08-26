@@ -26,21 +26,23 @@ nonisolated enum OllamaPull {
         let completed: Int64?
     }
 
-    /// Pulls `model` into the endpoint server's own store.
+    /// Pulls `model` into Ollama's own store.
+    ///
+    /// The endpoint is not a parameter: `/api/pull` exists only on Ollama —
+    /// llama-server and LM Studio serve no such route — so accepting a generic
+    /// `LocalServerEndpoint` offered a failure mode disguised as flexibility.
     ///
     /// Progress carries byte counts from the lines that have them; the manifest
-    /// and digest-verify phases carry none and report nothing — the granularity
-    /// rung two already ships with ("a concern of the surface that displays
-    /// it"). Cancelling the surrounding task aborts the request, and Ollama
-    /// aborts the pull server-side when its client disconnects; resuming across
-    /// launches is likewise delegated, so there is no `.part` handling here.
+    /// and digest-verify phases carry none and report nothing. Cancelling the
+    /// surrounding task aborts the request, and Ollama aborts the pull
+    /// server-side when its client disconnects; resuming across launches is
+    /// likewise delegated, so there is no `.part` handling here.
     static func pull(
         _ model: String,
-        endpoint: LocalServerEndpoint = .ollama,
         session: URLSession = .shared,
         progress: ModelDownload.ProgressHandler? = nil
     ) async throws {
-        var request = URLRequest(url: endpoint.baseURL.appending(path: "api/pull"))
+        var request = URLRequest(url: LocalServerEndpoint.ollama.baseURL.appending(path: "api/pull"))
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONSerialization.data(withJSONObject: ["model": model])
@@ -51,12 +53,12 @@ nonisolated enum OllamaPull {
             (bytes, response) = try await session.bytes(for: request)
         } catch {
             throw ModelDownloadError.downloadFailed(
-                "Cannot reach \(endpoint.name) at \(endpoint.baseURL.absoluteString) — \(error.localizedDescription)"
+                "Cannot reach Ollama at \(LocalServerEndpoint.ollama.baseURL.absoluteString) — \(error.localizedDescription)"
             )
         }
 
         if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
-            throw ModelDownloadError.downloadFailed("\(endpoint.name) returned HTTP \(http.statusCode)")
+            throw ModelDownloadError.downloadFailed("Ollama returned HTTP \(http.statusCode)")
         }
 
         let decoder = JSONDecoder()
@@ -71,12 +73,12 @@ nonisolated enum OllamaPull {
                 progress?(completed, total)
             }
             if update.status == "success" {
-                log.notice("Pulled \(model, privacy: .public) through \(endpoint.name, privacy: .public)")
+                log.notice("Pulled \(model, privacy: .public) through Ollama")
                 return
             }
         }
 
-        throw ModelDownloadError.downloadFailed("\(endpoint.name) closed the connection before the pull finished")
+        throw ModelDownloadError.downloadFailed("Ollama closed the connection before the pull finished")
     }
 
     // MARK: - What the server already holds
