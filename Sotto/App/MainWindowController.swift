@@ -12,12 +12,13 @@ import SwiftUI
 /// The `NSWindow` that hosts the main window's SwiftUI content, and the **only**
 /// place in Sotto that touches the activation policy.
 ///
-/// **No toolbar, and that is load-bearing rather than a simplification.** A single
-/// toolbar item makes the system draw the titlebar band back across the top, which
-/// is what removes §10.2's home for the segmented pill and pushes it into the
-/// sidebar. `.fullSizeContentView` plus a transparent, title-hidden titlebar is
-/// what leaves the sidebar running edge to edge with the traffic lights over it —
-/// the Safari/Finder/Mail shape (DECISIONS.md, 2026-08-15).
+/// `.fullSizeContentView` plus a transparent, title-hidden titlebar leaves the
+/// sidebar running edge to edge with the traffic lights over it — the
+/// Safari/Finder/Mail shape (DECISIONS.md, 2026-08-15). On macOS 26 the system
+/// still creates an `AXToolbar` for `NavigationSplitView`'s sidebar toggle, but
+/// no band is drawn; the detail's toolbar (Models) populates that existing
+/// toolbar's trailing region, so the detail no longer needs an in-content header
+/// strip and the empty titlebar gap above it is gone.
 @MainActor
 final class MainWindowController: NSWindowController, NSWindowDelegate {
     static let shared = MainWindowController()

@@ -105,6 +105,24 @@ nonisolated enum ModelDownload {
         return Manifest(repoID: repoID, revision: dto.sha ?? "main", files: files)
     }
 
+    /// Fetches a repo's `config.json` — the one small file the model list needs
+    /// before the user commits to gigabytes, because §2.3's estimate is shown
+    /// *before* the download and geometry (`num_hidden_layers`, KV heads, head
+    /// dim) lives here. Parsed by the same `CapabilityRegistry.parseMLXConfig`
+    /// `ModelStore` uses on disk; no second parser.
+    static func configData(for repoID: String, session: URLSession = .shared) async throws -> Data {
+        guard let url = URL(string: "https://huggingface.co/\(repoID)/resolve/main/config.json") else {
+            throw ModelDownloadError.manifestFailed("Not a valid repo id: \(repoID)")
+        }
+
+        let (data, response) = try await session.data(from: url)
+        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        guard status == 200 else {
+            throw ModelDownloadError.manifestFailed("\(repoID)/config.json: HTTP \(status)")
+        }
+        return data
+    }
+
     // MARK: - Acquisition
 
     /// Acquires `repoID` into `root` and returns it as a loadable model.
@@ -139,8 +157,12 @@ nonisolated enum ModelDownload {
         }
 
         let manifest = try await Self.manifest(for: repoID, session: session)
-        let staging = root.appending(path: ".incomplete-\(name)")
+        let staging = Self.stagingDirectory(for: repoID, in: root)
         try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
+
+        // What the interrupted-download scan reads back after a quit — the
+        // directory name alone carries only the display name, not the owner.
+        try? Data(repoID.utf8).write(to: staging.appending(path: ".repo-id"))
 
         let tally = RepoProgress(total: manifest.totalBytes, handler: progress)
         tally.report()
@@ -157,9 +179,40 @@ nonisolated enum ModelDownload {
             )
         }
 
+        try FileManager.default.removeItem(at: staging.appending(path: ".repo-id"))
         try FileManager.default.moveItem(at: staging, to: finalDirectory)
         log.notice("Acquired \(repoID, privacy: .public), \(manifest.totalBytes) bytes")
         return try ModelStore.model(at: finalDirectory)
+    }
+
+    // MARK: - Interruptions
+
+    /// Where a repo's bytes stage mid-download — the dot prefix keeps
+    /// `ModelStore.discover` from ever seeing a partial model.
+    static func stagingDirectory(for repoID: String, in root: URL = ModelStore.root) -> URL {
+        root.appending(path: ".incomplete-\((repoID as NSString).lastPathComponent)")
+    }
+
+    /// Downloads interrupted by a quit or a crash: staging directories still
+    /// under `root`, each with the repo id `acquire` wrote into it and the bytes
+    /// on disk so far. The pane turns each into a paused row whose Resume sends
+    /// the same `acquire` call, which appends over an HTTP `Range`.
+    static func interruptedDownloads(in root: URL = ModelStore.root) -> [(repoID: String, bytesOnDisk: Int64)] {
+        // Hidden files are the point here — `.incomplete-*` is dot-prefixed.
+        let contents = (try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)) ?? []
+        return contents.compactMap { url in
+            guard url.lastPathComponent.hasPrefix(".incomplete-"),
+                  let data = try? Data(contentsOf: url.appending(path: ".repo-id")),
+                  let repoID = String(data: data, encoding: .utf8), !repoID.isEmpty else { return nil }
+            return (repoID, ModelStore.diskBytes(in: url))
+        }
+    }
+
+    /// Discards a cancelled download's partial bytes. Cancel is not pause: the
+    /// user said stop, and the Available row keeps its estimate for a clean
+    /// restart. A quit keeps everything — that is what resume is for (§7.4).
+    static func discardPartial(_ repoID: String, in root: URL = ModelStore.root) {
+        try? FileManager.default.removeItem(at: stagingDirectory(for: repoID, in: root))
     }
 
     // MARK: - One file

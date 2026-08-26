@@ -80,4 +80,52 @@ nonisolated enum OllamaPull {
 
         throw ModelDownloadError.downloadFailed("Ollama closed the connection before the pull finished")
     }
+
+    // MARK: - What the server already holds
+
+    private struct TagsDTO: Decodable {
+        struct Model: Decodable {
+            let name: String
+            let size: Int64?
+        }
+        let models: [Model]?
+    }
+
+    /// The models the endpoint server has already pulled — rung three's
+    /// "already on disk" state, listed in the pane's Downloaded section the way
+    /// hand-placed weights are. An unreachable server is normal configuration,
+    /// not a failure, so it answers empty rather than throwing.
+    static func installed(endpoint: LocalServerEndpoint = .ollama, session: URLSession = .shared) async -> [(name: String, bytesOnDisk: Int64)] {
+        guard let (data, response) = try? await session.data(from: endpoint.baseURL.appending(path: "api/tags")),
+              let http = response as? HTTPURLResponse, http.statusCode == 200,
+              let tags = try? JSONDecoder().decode(TagsDTO.self, from: data) else { return [] }
+        return (tags.models ?? []).map { ($0.name, $0.size ?? 0) }
+    }
+
+    /// One model's `/api/show` body — capabilities and geometry for the
+    /// registry, the same JSON `parseOllamaShow` is tested against.
+    static func show(_ model: String, endpoint: LocalServerEndpoint = .ollama, session: URLSession = .shared) async throws -> Data {
+        var request = URLRequest(url: endpoint.baseURL.appending(path: "api/show"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["model": model])
+
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+            throw ModelDownloadError.downloadFailed("\(endpoint.name) /api/show \(model): HTTP \((response as? HTTPURLResponse)?.statusCode ?? 0)")
+        }
+        return data
+    }
+
+    private static func result(of request: URLRequest, session: URLSession) -> (Data, URLResponse?) {
+        var data = Data()
+        var response: URLResponse?
+        let semaphore = DispatchSemaphore(value: 0)
+        let task = session.dataTask(with: request) { d, r, _ in
+            data = d ?? Data(); response = r; semaphore.signal()
+        }
+        task.resume()
+        _ = semaphore.wait(timeout: .now() + 10)
+        return (data, response)
+    }
 }
