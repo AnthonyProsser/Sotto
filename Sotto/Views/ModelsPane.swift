@@ -37,55 +37,12 @@ nonisolated struct CuratedModel: Identifiable, Equatable {
 }
 
 /// §7.4: the curated list ships in the binary and changes when the app does —
-/// no fetching it, ever. Entries follow the 2026-08-25 design render minus its
-/// STT rows: v1's only speech backend is Apple's (DECISIONS.md, 2026-08-19),
-/// so Whisper and Parakeet are not offered. Repo ids are the mlx-community
-/// conversions; a wrong id fails visibly in the row that started it.
+/// no fetching it, ever. Intentionally empty for now — one-click installs are
+/// on hold until the default set is chosen deliberately. The Available section
+/// therefore shows only pasted candidates (until the list is curated again);
+/// Hugging Face repo ids and `ollama pull` remain the two acquisition paths.
 enum CuratedCatalog {
-    static let models: [CuratedModel] = [
-        CuratedModel(
-            repoID: "mlx-community/gpt-oss-20b-MXFP4",
-            lab: "OpenAI", monogram: "OA",
-            quantization: "MXFP4", vision: false, dictation: false,
-            blurb: "Open-weight reasoning model",
-            bakedBytes: 12_100_000_000
-        ),
-        CuratedModel(
-            repoID: "mlx-community/Qwen3-8B-4bit",
-            lab: "Alibaba", monogram: "QW",
-            quantization: "4bit", vision: false, dictation: false,
-            blurb: "Stronger reasoning, slower",
-            bakedBytes: 4_900_000_000
-        ),
-        CuratedModel(
-            repoID: "mlx-community/Qwen2.5-VL-7B-Instruct-4bit",
-            lab: "Alibaba", monogram: "QW",
-            quantization: "4bit", vision: true, dictation: false,
-            blurb: "Reads screenshots and documents",
-            bakedBytes: 4_400_000_000
-        ),
-        CuratedModel(
-            repoID: "mlx-community/gemma-3-12b-it-4bit",
-            lab: "Google", monogram: "GO",
-            quantization: "4bit", vision: true, dictation: false,
-            blurb: "Higher quality, needs headroom",
-            bakedBytes: 7_100_000_000
-        ),
-        CuratedModel(
-            repoID: "mlx-community/Llama-3.2-3B-Instruct-4bit",
-            lab: "Meta", monogram: "ME",
-            quantization: "4bit", vision: false, dictation: false,
-            blurb: "Lightweight text, low latency",
-            bakedBytes: 1_900_000_000
-        ),
-        CuratedModel(
-            repoID: "mlx-community/Mistral-Small-3.2-24B-Instruct-2506-4bit",
-            lab: "Mistral", monogram: "MI",
-            quantization: "4bit", vision: true, dictation: false,
-            blurb: "Largest supported build",
-            bakedBytes: 13_400_000_000
-        ),
-    ]
+    static let models: [CuratedModel] = []
 }
 
 /// What the machine already has, shown so the user knows it — no download, no
