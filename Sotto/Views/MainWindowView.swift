@@ -281,10 +281,14 @@ struct MainWindowView: View {
     @ViewBuilder
     private var detail: some View {
         if state.showingSettings {
-            ContentUnavailableView(
-                state.settingsSection.title,
-                systemImage: state.settingsSection.symbol
-            )
+            if state.settingsSection == .models {
+                ModelsPane()
+            } else {
+                ContentUnavailableView(
+                    state.settingsSection.title,
+                    systemImage: state.settingsSection.symbol
+                )
+            }
         } else {
             switch state.mode {
             case .chat:

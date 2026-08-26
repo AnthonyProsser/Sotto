@@ -10,8 +10,29 @@ nonisolated struct LocalModel: Sendable, Equatable, Identifiable {
     let directory: URL
     /// Sum of the `.safetensors` files — the `weights` term in §2.3's estimate.
     let weightsBytes: Int64
+    /// Everything the folder holds on disk — weights plus configs and tokenizer
+    /// data. The exact figure shown once acquired; before that only the
+    /// manifest's estimate exists. Defaults to `weightsBytes` when unmeasured,
+    /// which is the best figure a hand-built value carries.
+    let diskBytes: Int64
     let capability: ModelCapability
     let geometry: ModelGeometry?
+
+    init(
+        id: String,
+        directory: URL,
+        weightsBytes: Int64,
+        diskBytes: Int64? = nil,
+        capability: ModelCapability,
+        geometry: ModelGeometry?
+    ) {
+        self.id = id
+        self.directory = directory
+        self.weightsBytes = weightsBytes
+        self.diskBytes = diskBytes ?? weightsBytes
+        self.capability = capability
+        self.geometry = geometry
+    }
 
     /// §2.3's estimate at a given context length. Advisory, never a gate.
     func memoryEstimate(contextLength: Int) -> MemoryEstimate {
@@ -85,9 +106,18 @@ nonisolated enum ModelStore {
             id: directory.lastPathComponent,
             directory: directory,
             weightsBytes: weights,
+            diskBytes: diskBytes(in: directory),
             capability: capability,
             geometry: geometry
         )
+    }
+
+    /// Deletes a model folder and drops its capability registration. §7.4:
+    /// a model the user has is a file the user has — this is the pane's
+    /// confirmed Delete, nothing else calls it.
+    static func remove(_ model: LocalModel) throws {
+        try FileManager.default.removeItem(at: model.directory)
+        CapabilityRegistry.shared.unregister(modelId: model.id)
     }
 
     /// Discovers every local model and registers its capability, so the harness
@@ -115,6 +145,20 @@ nonisolated enum ModelStore {
             .reduce(into: Int64(0)) { total, url in
                 total += Int64((try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0)
             }
+    }
+
+    /// Recursive byte total of everything under `directory` — the exact size
+    /// the Models pane shows for a downloaded row. Also what the interrupted
+    /// download scan reports for a staging directory's `.part` bytes.
+    static func diskBytes(in directory: URL) -> Int64 {
+        let enumerator = FileManager.default.enumerator(
+            at: directory,
+            includingPropertiesForKeys: [.fileSizeKey]
+        )
+        let files = (enumerator?.allObjects as? [URL]) ?? []
+        return files.reduce(into: Int64(0)) { total, url in
+            total += Int64((try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0)
+        }
     }
 
     /// The model's Jinja chat template, from wherever the conversion put it.
