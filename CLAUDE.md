@@ -188,11 +188,11 @@ Five things that hold no matter what you are touching.
 
 **Predict, don't gate.** Hardware never gates a feature; it produces an estimate and an amber row. The one exception is model capability, and it gates on the model, not the machine. Detail in `rules/models-and-network.md` §1.
 
-**Seven things are undecided, and inventing an answer to one produces something that looks settled and is not.** Ask. The names are here rather than behind the pointer because the failure is answering a question you did not know existed — a pointer only helps a reader who already suspects. Reasoning in `rules/open-questions.md`; which slice hits which in `rules/slices.md` §4.
+**Three things are undecided, and inventing an answer to one produces something that looks settled and is not.** Ask. The names are here rather than behind the pointer because the failure is answering a question you did not know existed — a pointer only helps a reader who already suspects. Reasoning in `rules/open-questions.md`; which slice hits which in `rules/slices.md` §4.
 
-> Gaps: **1** the in-app chat's shape, three-way · **2** the overlay and HUD anchor numbers, value or rule · **3** the send button's volume.
-> Issues: **1** MCP Swift SDK vs. protocol version · **3** focus change mid-transcription · **4** cleanup reasoning toggle and default · **5** bare compose bar growth.
-> Numbers track spec §12 and never get renumbered. **Issue 2 (the SwiftUI / AppKit split) is closed** — every view is SwiftUI; AppKit holds the delegate, the status item, and the `NSWindow`/`NSPanel` hosts. See `DECISIONS.md`, 2026-08-15.
+> Gap **2**, the **HUD's** anchor number — its form is settled (a constant distance from the top of `NSScreen.frame`), the number is not. The overlay's half closed 2026-08-26.
+> Issues: **1** MCP Swift SDK vs. protocol version · **4** cleanup reasoning toggle and default.
+> Numbers track spec §12 and never get renumbered. **Closed and staying closed:** issue 2, the SwiftUI/AppKit split (2026-08-15); gap 1, the chat's shape (2026-08-27); gap 3, the send button (2026-08-27); issue 3, focus change mid-transcription (2026-08-27); issue 5, bare compose bar growth (2026-08-27). All in `DECISIONS.md`.
 
 ---
 

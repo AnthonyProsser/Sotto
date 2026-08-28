@@ -87,18 +87,9 @@ struct HUDView: View {
                 // and the rim refraction, which a later `.clipShape` would cut.
                 .glassEffect(Token.Material.hud, in: Token.shape(radius: Self.radius))
         }
-        // The specular rim, on the *container* rather than inside it. Applied
-        // inside, the glass composites the stroke and it comes out diffuse while
-        // the waveform in the same frame stays crisp — which is what identified
-        // it. Never a `clipShape`: that cuts the edge the material itself draws
-        // outside the path (§6.1).
-        .overlay {
-            Token.shape(radius: Self.radius)
-                .strokeBorder(
-                    Token.Authored.Specular.rim,
-                    lineWidth: Token.Authored.Specular.width
-                )
-        }
+        // The specular rim, on the *container* rather than inside it — the
+        // reason why is on `specularRim(radius:)`, which the overlay wears too.
+        .specularRim(radius: Self.radius)
         // The panel is deliberately larger than any state so the glass can grow
         // without the window resizing (`HUDPanel`), which means the surface has
         // to say where in that canvas it sits. Centre: the HUD is anchored to the

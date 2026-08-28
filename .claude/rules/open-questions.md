@@ -1,6 +1,8 @@
 # Open questions — do not invent answers to these
 
-**Seven things are genuinely undecided**, matching `CLAUDE.md` §2's count now that the app icon is closed. If your work needs one, **ask Anthony**. Inventing an answer produces something that looks settled and is not.
+**Three things are genuinely undecided**, matching `CLAUDE.md` §2's count. If your work needs one, **ask Anthony**. Inventing an answer produces something that looks settled and is not.
+
+**Four closed on 2026-08-27** — gap 1, gap 3, issue 3, issue 5 — all in `DECISIONS.md`. Their sections are struck through below rather than deleted: the reasoning is what stops each one being reopened by someone who only sees the answer.
 
 `CLAUDE.md` §2 lists the titles so they stay visible without opening this file. The reasoning is here.
 
@@ -8,7 +10,9 @@
 
 ## Known gaps
 
-### Gap 1 — decision 04, the in-app chat, has no home in the spec
+### ~~Gap 1 — decision 04, the in-app chat, has no home in the spec~~ — **closed 2026-08-27**
+
+**A right-docked 560 pt column with no panel edge — `Designs for Slice9.pdf` Frame 2.** The three-way was one shape at two zoom levels plus an anatomy: §5.8's bounded panel is **Frame 3**, the centred bar with no chat above it; decision 04's wash is what Frame 2 draws; the SVG was the same wash without measurements, and its turn anatomy survives intact. See `DECISIONS.md`. The argument below is kept because it is what made the reconciliation legible.
 
 `designs/Design.pdf` locks an edge-anchored, full-height wash with no panel edge, no chat picker, and a 390 × 81 pt glass composer (`sotto-tokens.md` §6.4). Spec §5.8 describes something different: a bounded floating panel, 600 pt bar, growth to 180 pt, cap at the lesser of 720 pt and 70 % of usable height. They may be one surface in two states or two surfaces; **the spec does not say, because it predates the decision.** Slice 9 or 10 has to reconcile them, and the reconciliation belongs in spec §5 rather than in the token sheet. **Do not pick one and build it.**
 
@@ -26,7 +30,9 @@ The SVG's turn anatomy — speaker labels, quoted selection, no assistant bubble
 
 The HUD's **8 %** top position does not decompose — it came from an assumed 1512 × 982 screen with a 24 pt menu bar, and a notched MacBook Pro menu bar is taller than 24 pt. **Decide per anchor whether it is a fixed value or a rule, and record which.**
 
-### Gap 3 — the send button's volume contradicts §14.3
+### ~~Gap 3 — the send button's volume contradicts §14.3~~ — **closed 2026-08-27**
+
+**Present, and quiet: a 26 pt circle at 7 % ink with a 60 % ink glyph.** §14.3's objection was to volume, not to presence; `Design.pdf`'s saturated accent circle is the document that needs amending. See `DECISIONS.md`.
 
 §14.3 rejects "a saturated send button — the loudest thing in Gemini's bar and the first thing that makes it feel intrusive," and §5.8 restores the button but explicitly "not its volume." `Design.pdf` decisions 01 and 04 both draw it as a **filled 26 pt accent circle**, the most saturated element in either surface. Either the drawn treatment is what §14.3 warned against, or §14.3's objection was to size or position rather than fill.
 
@@ -44,6 +50,6 @@ One layer per capsule, `Sotto/Sotto.icon`. See `DECISIONS.md`. It was an asset d
 
 1. **MCP Swift SDK lags the protocol.** `modelcontextprotocol/swift-sdk` 0.12.1 (May 2026) implements 2025-11-25; Sotto targets 2026-07-28, which removes the handshake and sessions and adds Multi Round-Trip Requests. Wait, fork, or write the client directly against the spec. **Decide before writing a line of slice 12.**
 2. ~~**SwiftUI / AppKit split.**~~ **Closed 2026-08-15 — see `DECISIONS.md`.** Every view is SwiftUI, including the main window; AppKit is confined to the app delegate, the status item and its `NSMenu`, and the `NSWindow`/`NSPanel` objects hosting SwiftUI via `NSHostingView`. **Consequence: each §14.2 role has exactly one `Color` form, never a paired `NSColor`** — that pairing was the objection, and pushing the main window into SwiftUI is what removed it. The number is kept and not reused; spec §12's numbering is referenced elsewhere.
-3. **Focus changes mid-transcription.** User dictates into a field, then clicks away before transcription finishes. Original target, or clipboard? Routing to the original risks writing into a window the user has left; the clipboard is safe but surprising when the field is still right there.
+3. ~~**Focus changes mid-transcription.**~~ **Closed 2026-08-27 — the clipboard.** Routing to the original target risks writing into a window the user has left, which is §4.5's one ruled-out failure: text arriving where nobody is looking, with no error anywhere. The clipboard is surprising when the field is still right there, and that cost is accepted because it is *visible* — the existing no-focused-field path already morphs the HUD to "Copied to clipboard" and fades. See `DECISIONS.md`.
 4. **Cleanup reasoning: toggle, and default.** May help punctuation on ambiguous prosody; multiplies latency on the step between speaking and seeing text. §8.1 currently defaults it open. Lands in slice 11.
-5. **Bare compose bar growth.** The full panel grows, then caps and scrolls. Whether a standalone bar with no conversation above it does the same or caps sooner is undecided — a bar that grows to 180 pt with nothing above it may read as broken rather than accommodating. **Decide in slice 9's design pass, not in code.**
+5. ~~**Bare compose bar growth.**~~ **Closed 2026-08-27 — the same, to 144 pt, then internal scroll.** Frame 3's "same composer, same 600 pt column, centred" was the drawing already answering it, and the worry that a bare bar growing with nothing above it reads as broken did not survive Anthony seeing it drawn. Note the height: six lines is **144 pt**, not §5.8's 180, because the drawn type is 15/24. See `DECISIONS.md`.

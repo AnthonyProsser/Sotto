@@ -320,9 +320,9 @@ It is an undated, unlocked sketch, not to scale: its 378 × 70/radius 22 compose
 
 ## 13. Open questions
 
-**Four are open on the design side — gaps 1, 2, 3 and issue 5. Read `.claude/rules/open-questions.md` before slices 9, 10, or 13, and ask rather than settle.** Issue 2 is closed: all SwiftUI, one `Color` per role (§6.6).
+**One is open on the design side — gap 2's HUD anchor number. Read `.claude/rules/open-questions.md` before slice 3, and ask rather than settle.** Gaps 1 and 3 and issue 5 all closed on 2026-08-27; issue 2 closed 2026-08-15 — all SwiftUI, one `Color` per role (§6.6).
 
-**That duty is to those four by name, and does not generalise.** An undecided number that is not one of them is not an open question — it is `CLAUDE.md` §0.7's small local choice, and §1 and §9 say what to do with it.
+**That duty is to that one by name, and does not generalise.** An undecided number that is not one of them is not an open question — it is `CLAUDE.md` §0.7's small local choice, and §1 and §9 say what to do with it.
 
 ## 14. Before declaring design work done
 

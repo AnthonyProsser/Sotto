@@ -150,6 +150,28 @@ extension Token.Material {
     /// **Not `.interactive()`**: that adds the press-and-flex response, and the
     /// HUD has no controls at all.
     static var hud: Glass { .clear }
+
+    /// `material.overlay` — **first consumer: `OverlayView`, slice 9.**
+    ///
+    /// Tier 1, one of `Glass`'s five members, and the second of the two
+    /// materials this file's note reserves by name: floating-panel glass for the
+    /// overlay, Control Center glass for the HUD (slice 0's table).
+    ///
+    /// **`.regular`, where the HUD is `.clear`, and the difference is what the
+    /// surface has to carry.** The HUD holds a waveform and one short string over
+    /// whatever the user happens to be looking at, so `.clear`'s harder
+    /// refraction is free. The overlay holds editable text the user is reading
+    /// while they type it, 600 pt wide over an arbitrary wallpaper, and `.clear`
+    /// refracts the backdrop through the one thing that must stay legible.
+    /// Spotlight — slice 0's named reference for this surface — is the denser
+    /// material, not the clearer one.
+    ///
+    /// **Not `.interactive()`.** That is the press-and-flex response for a glass
+    /// control; the bar is a container of controls, not one.
+    ///
+    /// Anthony ruled the HUD from renders and reversed the default doing it; this
+    /// is the parallel row and the same ruling is expected on it.
+    static var overlay: Glass { .regular }
 }
 
 // MARK: - Tier 2 — Authored
@@ -238,38 +260,95 @@ extension Token.Authored {
     /// rather than strength: a separator is one flat colour the whole way round,
     /// and this is a lit bevel.
     ///
-    /// **Bright at top-left and bottom-right, dark at top-right and bottom-left**
-    /// (Anthony, from the reference). One light source above and to the left; the
-    /// rim is brightest where the surface turns to face it, which happens twice
-    /// on opposite sides because the far edge catches it again. Hence a period of
-    /// 180° rather than one revolution.
+    /// **Two long streaks, 180° apart**, each running from one corner region
+    /// through the middle of an edge and out past it. Anthony, 2026-08-27: the
+    /// streaks used to stop dead at the top and bottom centres, which reads as
+    /// two separate marks rather than one edge; the top one now carries past 12
+    /// o'clock toward the top right, the bottom one past 6 o'clock into the
+    /// bottom left. Still one light source above and to the left, caught twice
+    /// on opposite edges, hence the 180° period.
     ///
-    /// **Not a symmetric white-to-black pair**, which would read as piping. The
-    /// dark lobes are weak so the shadow side reads as *unlit* rather than drawn.
+    /// **One polarity, not a white-and-black pair.** The rim is `.primary` at
+    /// two strengths, so it is dark over a light appearance and light over a
+    /// dark one (Anthony, 2026-08-27: "make the streaks dark on a light
+    /// background so its flipped"). The fixed white highlight was close to
+    /// invisible on a light backdrop and the fixed black lobes did nothing on a
+    /// dark one — both were drawing against the surface instead of with it.
+    ///
+    /// **What it keys off, stated plainly: the resolved `colorScheme`, not the
+    /// luminance of what is behind the glass.** Glass flips its *content* from
+    /// its backdrop (`rules/design.md` §6.7), but this is a stroke on the
+    /// container, outside the glass, so it never sees that. The HUD's rim
+    /// follows the appearance `HUDPanel` pins; the overlay's follows the system
+    /// appearance. Keying it off real backdrop luminance needs the screen sample
+    /// that has been open since 2026-08-19, and a hairline does not justify a
+    /// Screen Recording prompt.
     enum Specular {
         /// Hairline. `strokeBorder` insets by half of this and draws inward, so
         /// the rim sits on the glass instead of straddling its edge.
-        static let width: CGFloat = 1
+        ///
+        /// **0.75, down from 1 (Anthony, 2026-08-27).** Thinner and dimmer are
+        /// the same instruction — a lit edge that is too present reads as
+        /// chrome, which is what the original row already flagged about its own
+        /// strength.
+        static let width: CGFloat = 0.75
 
-        static let highlight = Color.white.opacity(0.5)
-        static let shadow = Color.black.opacity(0.12)
+        /// The lit part of a streak. **Down from 0.5 (Anthony, 2026-08-27),
+        /// against an AirDrop-tile reference** where the streak is long, soft,
+        /// and never brighter than the surface it lies on.
+        static let highlight = Color.primary.opacity(0.28)
 
-        /// SwiftUI's angular gradient starts at 3 o'clock and runs clockwise in a
-        /// y-down space: 45° bottom-right, 135° bottom-left, 225° top-left,
-        /// 315° top-right. Locations are those angles over 360.
+        /// The rim's resting value between the streaks. Not transparent: a
+        /// stroke that vanishes between them reads as two marks rather than one
+        /// edge catching the light twice.
+        private static let mid = Color.primary.opacity(0.05)
+
+        /// SwiftUI's angular gradient starts at 3 o'clock and runs clockwise in
+        /// a y-down space: 90° is bottom centre, 180° left, 270° top centre.
+        /// Locations are those angles over 360.
+        ///
+        /// Each streak is a 105° plateau. The previous 50° plateaus ended at 70°
+        /// and 250°, twenty degrees short of the bottom and top centres — that
+        /// is the "ends when it hits the middle" Anthony called out. They now run
+        /// 20°→125° and 200°→305°, so each crosses the centre of its edge and
+        /// dies in the far quadrant, which puts the quiet stretches at the left
+        /// and right midpoints instead of at the corners.
         static var rim: AngularGradient {
-            let mid = Color.white.opacity(0.08)
-            return AngularGradient(
+            AngularGradient(
                 stops: [
-                    .init(color: mid, location: 0),
-                    .init(color: highlight, location: 0.125),   //  45° bottom-right
-                    .init(color: shadow, location: 0.375),      // 135° bottom-left
-                    .init(color: highlight, location: 0.625),   // 225° top-left
-                    .init(color: shadow, location: 0.875),      // 315° top-right
-                    .init(color: mid, location: 1),
+                    .init(color: mid, location: 0),             //   0° right
+                    .init(color: highlight, location: 0.055),   //  20°
+                    .init(color: highlight, location: 0.347),   // 125° past bottom centre, into bottom-left
+                    .init(color: mid, location: 0.458),         // 165° left
+                    .init(color: highlight, location: 0.555),   // 200°
+                    .init(color: highlight, location: 0.847),   // 305° past top centre, into top-right
+                    .init(color: mid, location: 0.958),         // 345° right
+                    .init(color: mid, location: 1),             // 360°
                 ],
                 center: .center
             )
+        }
+    }
+}
+
+/// **One rim, drawn in one place.** `HUDView` and `OverlayView` both wear it and
+/// had the same four lines each; the values were already shared through
+/// `Specular`, the drawing was not (`CLAUDE.md` §0.3 — do not build the same
+/// helper twice).
+///
+/// **It goes on the `GlassEffectContainer`, never inside it.** Applied inside,
+/// the glass composites the stroke and it renders diffuse and bleeds inward;
+/// outside, it is crisp (`DECISIONS.md`, 2026-08-19). Never a `clipShape`: that
+/// cuts the edge the material itself draws outside the path
+/// (`rules/design.md` §6.1).
+extension View {
+    func specularRim(radius: CGFloat) -> some View {
+        overlay {
+            Token.shape(radius: radius)
+                .strokeBorder(
+                    Token.Authored.Specular.rim,
+                    lineWidth: Token.Authored.Specular.width
+                )
         }
     }
 }
