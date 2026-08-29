@@ -23,10 +23,36 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ aNotification: Notification) {
         StatusItemController.shared.install()
         EventTap.shared.install()
+        // Window-server reconnect (sleep/wake, display reconfiguration) orphans
+        // borderless NSPanels at .statusBar — the Swift object lives but its
+        // CGWindowID is invalid and orderFrontRegardless becomes a silent no-op.
+        // HUDPanel self-heals via ensurePanel(), but proactively dropping the
+        // retained panel on wake means the next gesture pays make() rather than
+        // detecting the orphan. This is the second observer — HUDPanel also
+        // observes directly so it heals even if AppDelegate's token is lost.
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self,
+            selector: #selector(handleWake),
+            name: NSWorkspace.didWakeNotification,
+            object: nil
+        )
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self,
+            selector: #selector(handleSleep),
+            name: NSWorkspace.screensDidSleepNotification,
+            object: nil
+        )
         // Resolves the locale, claims it with `AssetInventory.reserve`, and caches
         // the analyzer's audio format — all of it before the first gesture, so
         // that starting a recording costs no `await`.
         Dictation.shared.prepare()
+    }
+
+    @objc private func handleWake() {
+        Task { @MainActor in HUDPanel.shared.invalidateForWake(reason: "AppDelegate.wake") }
+    }
+    @objc private func handleSleep() {
+        Task { @MainActor in HUDPanel.shared.invalidateForWake(reason: "AppDelegate.sleep") }
     }
 
     /// Sotto lives in the menu bar; closing the main window is not quitting. Quit is

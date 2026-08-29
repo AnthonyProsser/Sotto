@@ -7,6 +7,7 @@
 
 import AppKit
 import SwiftUI
+import os
 
 /// A non-activating panel that hosts `HUDView` and never takes focus.
 ///
@@ -24,6 +25,8 @@ import SwiftUI
 @MainActor
 final class HUDPanel {
     static let shared = HUDPanel()
+
+    private let log = Logger(subsystem: "com.anthonyprosser.Sotto", category: "hud")
 
     /// Distance from the top of `NSScreen.frame` — the physical top of the
     /// display, not `visibleFrame`'s top, which moves with the menu bar.
@@ -76,7 +79,79 @@ final class HUDPanel {
     private var dismissal: DispatchWorkItem?
     private var warmupTeardown: DispatchWorkItem?
 
-    private init() {}
+    private init() {
+        // Wake/sleep invalidation lives here so the panel heals even if
+        // AppDelegate's observer is removed. The panel is a singleton, so
+        // these tokens live for the process lifetime.
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self,
+            selector: #selector(handleWake),
+            name: NSWorkspace.didWakeNotification,
+            object: nil
+        )
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self,
+            selector: #selector(handleSleep),
+            name: NSWorkspace.screensDidSleepNotification,
+            object: nil
+        )
+        // Display reconfiguration (dock moved, screen added) transiently empties
+        // NSScreen.screens — not a wake, but the same position fallback applies.
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleScreensChanged),
+            name: NSApplication.didChangeScreenParametersNotification,
+            object: nil
+        )
+    }
+
+    @objc private nonisolated func handleWake() {
+        // NSWorkspace posts on the main thread, but NotificationCenter
+        // delivers on the posting thread — defensively hop. AppKit must
+        // stay on main; mirrors AppDelegate's Task { @MainActor }.
+        Task { @MainActor in HUDPanel.shared.invalidateForWake(reason: "wake") }
+    }
+    @objc private nonisolated func handleSleep() {
+        Task { @MainActor in HUDPanel.shared.invalidateForWake(reason: "sleep") }
+    }
+    @objc private nonisolated func handleScreensChanged() {
+        // No invalidation — screen set just changed; next position() will
+        // re-resolve NSScreen.main. Logged only if position() finds no screen.
+    }
+
+    /// Drop the retained panel after the window server has torn it down.
+    /// Next gesture rebuilds via `ensurePanel()`. Called from wake/sleep
+    /// observers and from `AppDelegate`.
+    func invalidateForWake(reason: String = "external") {
+        guard let existing = panel else { return }
+        log.notice("HUDPanel invalidate reason=\(reason, privacy: .public) windowNumber=\(existing.windowNumber, privacy: .public) isVisible=\(existing.isVisible, privacy: .public)")
+        existing.orderOut(nil)
+        panel = nil
+        host = nil
+    }
+
+    /// Window-server reconnect orphans the retained NSPanel: the Swift object
+    /// lives but its CGWindowID is invalid, so `orderFrontRegardless` is a
+    /// silent no-op (`isVisible` stays false, `windowNumber <= 0`).
+    private var isOrphaned: Bool {
+        guard let existing = panel else { return false }
+        return existing.windowNumber <= 0
+    }
+
+    private func ensurePanel() -> NSPanel {
+        if let existing = panel, existing.windowNumber <= 0 {
+            log.notice("HUDPanel rebuild orphan windowNumber=\(existing.windowNumber, privacy: .public) isVisible=\(existing.isVisible, privacy: .public)")
+            existing.orderOut(nil)
+            panel = nil
+            host = nil
+        }
+        // `isVisible==false` alone is not orphan — panel is normally hidden
+        // between dictations — but a retained panel that is *supposed* to be
+        // visible and isn't after `orderFront` is the observed failure. The
+        // guard is on `windowNumber` which is the invariant that survives that
+        // distinction.
+        return panel ?? make()
+    }
 
     private func render() { host?.rootView = HUDView(state: state, appearance: appearance, running: running) }
 
@@ -93,22 +168,34 @@ final class HUDPanel {
     func prepare(_ state: HUDState) {
         dismissal?.cancel()
         warmupTeardown?.cancel()
-        if panel?.isVisible != true { appearance = Self.appearanceNow() }
+        // Heal orphan before deciding appearance — `isVisible` is false for
+        // both "hidden between dictations" and "orphaned after wake"; the
+        // windowNumber check inside ensurePanel distinguishes them.
+        let resolved = ensurePanel()
+        if !resolved.isVisible { appearance = Self.appearanceNow() }
         self.state = state
-        let panel = self.panel ?? make()
         running = true
-        panel.alphaValue = 0
-        position(panel)
-        panel.orderFrontRegardless()
+        resolved.alphaValue = 0
+        position(resolved)
+        resolved.orderFrontRegardless()
+        if !resolved.isVisible || resolved.windowNumber <= 0 {
+            log.error("HUDPanel prepare orderFront failed isVisible=\(resolved.isVisible, privacy: .public) windowNumber=\(resolved.windowNumber, privacy: .public) windows=\(NSApp.windows.count, privacy: .public)")
+        }
     }
 
     func show(_ state: HUDState) {
         dismissal?.cancel()
         warmupTeardown?.cancel()
-        if panel?.isVisible != true { appearance = Self.appearanceNow() }
+        let wasVisible = panel?.isVisible == true
+        if !wasVisible { appearance = Self.appearanceNow() }
         self.state = state
         running = true
-        panel(orderingFront: true)
+        let resolved = panel(orderingFront: true)
+        // Defensive log — the overnight repro's diagnostic was `count of
+        // windows → 0` immediately after orderFront with no exception.
+        if !resolved.isVisible || resolved.windowNumber <= 0 {
+            log.error("HUDPanel show orderFront failed isVisible=\(resolved.isVisible, privacy: .public) windowNumber=\(resolved.windowNumber, privacy: .public) windows=\(NSApp.windows.count, privacy: .public)")
+        }
     }
 
     /// Build the panel and render it once at launch, so the first gesture pays
@@ -124,11 +211,19 @@ final class HUDPanel {
     /// display refresh — 8.8 ms, 16.5 ms — with no penalty for the first one having
     /// been transparent. That is what `prepare(_:)` above relies on.
     func warm() {
+        // If an orphan survived until warm (e.g. immediate relaunch after
+        // wake), heal it rather than returning the orphan.
+        if isOrphaned {
+            log.notice("HUDPanel warm healing orphan windowNumber=\(self.panel?.windowNumber ?? -999, privacy: .public)")
+            self.panel?.orderOut(nil)
+            self.panel = nil
+            self.host = nil
+        }
         guard panel == nil else { return }
-        let panel = panel(orderingFront: false)
-        panel.alphaValue = 0
-        position(panel)
-        panel.orderFrontRegardless()
+        let resolved = panel(orderingFront: false)
+        resolved.alphaValue = 0
+        position(resolved)
+        resolved.orderFrontRegardless()
         // Three frames at 60 Hz — enough for the first composite to happen before
         // the panel goes away again.
         //
@@ -138,9 +233,9 @@ final class HUDPanel {
         // uncancellable teardown ordered the panel out from under a live
         // dictation. It also no longer clears `running`: `warm()` never sets it,
         // so the only value it could ever have cleared was a gesture's.
-        let teardown = DispatchWorkItem { [weak panel] in
-            panel?.orderOut(nil)
-            panel?.alphaValue = 1
+        let teardown = DispatchWorkItem { [weak resolved] in
+            resolved?.orderOut(nil)
+            resolved?.alphaValue = 1
         }
         warmupTeardown = teardown
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05, execute: teardown)
@@ -193,7 +288,7 @@ final class HUDPanel {
 
     @discardableResult
     private func panel(orderingFront: Bool) -> NSPanel {
-        let panel = self.panel ?? make()
+        let panel = ensurePanel()
         if orderingFront {
             // Undoes `prepare(_:)`, and is the whole of the reveal when the armed
             // window already put the surface on screen.
@@ -245,7 +340,10 @@ final class HUDPanel {
     /// Centred horizontally on the active screen, `topInset` below its physical
     /// top edge. Re-run on every show: the active screen changes.
     private func position(_ panel: NSPanel) {
-        guard let screen = NSScreen.main ?? NSScreen.screens.first else { return }
+        guard let screen = NSScreen.main ?? NSScreen.screens.first else {
+            log.error("HUDPanel position no screen NSScreen.main=nil screens.count=\(NSScreen.screens.count, privacy: .public) — panel not positioned, will be off-screen")
+            return
+        }
         let frame = screen.frame
         // The glass sits centred in the canvas, so the canvas top is half the
         // slack above it.
