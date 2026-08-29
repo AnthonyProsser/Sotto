@@ -98,7 +98,8 @@ final class EventTap {
         case .abort:
             Dictation.shared.abort()
         case .overlay:
-            break // Slice 9.
+            // A second double-tap while it is up puts it away (§5.1, §5.7).
+            OverlayPanel.shared.toggle()
         }
     }
 

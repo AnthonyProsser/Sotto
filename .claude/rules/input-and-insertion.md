@@ -88,6 +88,8 @@ Learned by hitting all three on 2026-08-18, in slice 2. Every one of them produc
 
 ---
 
-## 6. Open question that lands here
+## 6. Focus changes mid-transcription — the clipboard (2026-08-27)
 
-**Focus changes mid-transcription** — open issue 3 in `.claude/rules/open-questions.md`. User dictates into a field, then clicks away before transcription finishes. Original target, or clipboard? Undecided; ask, do not pick.
+**The user dictates into a field, then clicks away before transcription finishes: the text goes to the clipboard.** Not to the original target. Open issue 3, closed by Anthony on 2026-08-27.
+
+Routing to the original risks writing into a window the user has left, which is §4.5's one ruled-out failure — text arriving where nobody is looking, with no error anywhere. The clipboard is surprising when the field is still right there, and that cost is accepted because it is *visible*: §2's no-focused-field path already exists, and the HUD morph that confirms it is already built. **Reuse that path; do not write a second one.**

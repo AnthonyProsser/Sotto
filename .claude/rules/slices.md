@@ -48,13 +48,13 @@ Do not build past one of these without asking — `.claude/rules/open-questions.
 
 | Slice | Question |
 |---|---|
-| **9** | Send button volume (gap 3); bare compose bar growth (issue 5); the chat's shape if it lands here (gap 1) |
+| **9** | ~~Send button volume (gap 3); bare compose bar growth (issue 5); the chat's shape (gap 1)~~ — **all three closed 2026-08-27**, see `DECISIONS.md` |
 | **3** | The **HUD's** anchor — the 8 % top offset, value or rule (gap 2). Slice 3 builds the HUD panel, so it has to be positioned here |
 | **9** | The **overlay's** anchor — the 118 pt bottom offset, value or rule (gap 2) |
-| **10** | Decision 04's shape, three-way (gap 1) |
+| **10** | ~~Decision 04's shape, three-way (gap 1)~~ — **closed 2026-08-27**: Frame 2's right-docked 560 pt column |
 | **11** | Cleanup reasoning toggle and default (issue 4) |
 | **12** | MCP Swift SDK vs. protocol version (issue 1) — **decide before the first line** |
-| Any | Focus change mid-transcription (issue 3). Issue 2 is closed — all SwiftUI |
+| Any | ~~Focus change mid-transcription (issue 3)~~ — **closed 2026-08-27: the clipboard**, `rules/input-and-insertion.md` §6. Issue 2 closed — all SwiftUI |
 
 ---
 
