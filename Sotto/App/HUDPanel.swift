@@ -83,13 +83,13 @@ final class HUDPanel {
         // Wake/sleep invalidation lives here so the panel heals even if
         // AppDelegate's observer is removed. The panel is a singleton, so
         // these tokens live for the process lifetime.
-        NotificationCenter.default.addObserver(
+        NSWorkspace.shared.notificationCenter.addObserver(
             self,
             selector: #selector(handleWake),
             name: NSWorkspace.didWakeNotification,
             object: nil
         )
-        NotificationCenter.default.addObserver(
+        NSWorkspace.shared.notificationCenter.addObserver(
             self,
             selector: #selector(handleSleep),
             name: NSWorkspace.screensDidSleepNotification,
@@ -105,9 +105,16 @@ final class HUDPanel {
         )
     }
 
-    @objc private func handleWake() { invalidateForWake(reason: "wake") }
-    @objc private func handleSleep() { invalidateForWake(reason: "sleep") }
-    @objc private func handleScreensChanged() {
+    @objc private nonisolated func handleWake() {
+        // NSWorkspace posts on the main thread, but NotificationCenter
+        // delivers on the posting thread — defensively hop. AppKit must
+        // stay on main; mirrors AppDelegate's Task { @MainActor }.
+        Task { @MainActor in HUDPanel.shared.invalidateForWake(reason: "wake") }
+    }
+    @objc private nonisolated func handleSleep() {
+        Task { @MainActor in HUDPanel.shared.invalidateForWake(reason: "sleep") }
+    }
+    @objc private nonisolated func handleScreensChanged() {
         // No invalidation — screen set just changed; next position() will
         // re-resolve NSScreen.main. Logged only if position() finds no screen.
     }
@@ -304,7 +311,6 @@ final class HUDPanel {
         )
         panel.isFloatingPanel = true
         panel.hidesOnDeactivate = false
-        panel.isReleasedWhenClosed = false
         panel.isOpaque = false
         panel.backgroundColor = .clear
         // Glass carries its own shading. A window shadow underneath it is the
