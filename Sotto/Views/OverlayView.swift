@@ -220,27 +220,21 @@ struct OverlayView: View {
         .onDrop(of: [.image, .fileURL, .png, .tiff], isTargeted: $isDropTargeted, perform: handleDrop)
     }
 
-    /// The composer inside the field: text row with the chat capsule beside it
-    /// (Anthony's placement — the drawing omits the switcher), controls row
-    /// under it, `+` leading and send trailing, all inside one glass rect.
-    /// Chips wrap above the text, nearest convention to the bare bar's stack.
+    /// **The same chat bar as the bare state, at panel width** (Anthony,
+    /// 2026-09-01: the docked composer was its own two-row implementation and
+    /// read as a different control — the selector sat beside the text and the
+    /// bar grew unbounded because nothing framed the text view). One row to
+    /// type in — `+`, field, chat capsule, send — until the line fills, then
+    /// the draft moves to the top row and the bottom row keeps only attach,
+    /// chat, and send. That is exactly `composer`'s inline→stacked switch, so
+    /// the docked state reuses it wholesale; the only docked differences are
+    /// the placeholder and the width.
     private var panelComposer: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            if !store.draft.attachments.isEmpty {
-                chips
-            }
-            HStack(alignment: .top, spacing: 8) {
-                field
-                chatControl
-            }
-            HStack(spacing: Self.gap) {
-                addContext
-                Spacer(minLength: 0)
-                sendButton
-            }
+        GlassEffectContainer(spacing: 0) {
+            composer
+                .glassEffect(Token.Material.overlay, in: Token.shape(radius: Self.radius))
         }
-        .padding(12)
-        .glassEffect(Token.Material.overlay, in: Token.shape(radius: Self.radius))
+        .specularRim(radius: Self.radius)
         .shadow(color: Color.black.opacity(0.10), radius: 6, x: 0, y: 4)
         .shadow(color: Color.black.opacity(0.08), radius: 16, x: 0, y: 10)
         .shadow(color: Color.black.opacity(0.05), radius: 32, x: 0, y: 18)
@@ -366,8 +360,10 @@ struct OverlayView: View {
     /// The ChatGPT-bar treatment (Anthony, 2026-09-01, reference screenshot):
     /// the circle contrasts with its surroundings so it pops without colour —
     /// near-solid primary in light mode, a lighter wash of it in dark, the
-    /// glyph inverting to match. The circle still does nothing on an empty
-    /// draft, so it dims rather than shouting a send that can't happen.
+    /// glyph inverting to match. **No empty-state dim**: the flip from dimmed
+    /// to full on the first keystroke read as the whole bar darkening (the
+    /// "two layers" report) — the circle's look is now constant, and the
+    /// disabled state still blocks the send.
     @Environment(\.colorScheme) private var colorScheme
 
     private var sendFill: Color {
@@ -390,7 +386,6 @@ struct OverlayView: View {
         }
         .buttonStyle(.plain)
         .disabled(store.draft.isEmpty)
-        .opacity(store.draft.isEmpty ? 0.4 : 1)
         .keyboardShortcut(.return, modifiers: [])
     }
 

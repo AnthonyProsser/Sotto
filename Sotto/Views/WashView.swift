@@ -102,6 +102,10 @@ struct WashView: NSViewRepresentable {
             CATransaction.begin()
             CATransaction.setDisableActions(true)
             tint.frame = bounds
+            // The mask frame must track the field: a zero-frame mask renders
+            // no alpha, and the whole field — material and tint — was invisible
+            // until this line existed (the "no blur, no darken" report).
+            mask.frame = bounds
             regenerateMaskIfNeeded()
             CATransaction.commit()
         }
