@@ -99,6 +99,15 @@ final class OverlayPanel {
         if panel?.isVisible == true { hide() } else { show() }
     }
 
+    /// Retarget while visible (§5.3): docked-vs-centred is a property of the
+    /// draft's target, so switching chats in the picker has to move the window
+    /// now, not on the next show. No-op when the overlay is down — `show()`
+    /// positions anyway.
+    func reposition() {
+        guard let panel, panel.isVisible else { return }
+        position(panel)
+    }
+
     /// Whoever was frontmost when the overlay opened, so `hide()` can hand focus
     /// back. Held **strongly**, not weak — `NSWorkspace.frontmostApplication`
     /// returns an autoreleased instance and the weak slot was nil-ing by the time

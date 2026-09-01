@@ -98,7 +98,7 @@ struct OverlayView: View {
     @State private var store = DraftStore.shared
     @State private var fieldHeight: CGFloat = OverlayView.lineHeight
     @State private var expanded = false
-    @State private var showPicker = false
+    @State private var recents: [DraftStore.RecentChat] = []
     @State private var isDropTargeted = false
 
     private var draft: Draft { store.draft }
@@ -136,8 +136,6 @@ struct OverlayView: View {
                 .shadow(color: Color.black.opacity(0.05), radius: 32, x: 0, y: 18)
                 // Lift bar above window edge so shadow paints — clipped otherwise.
                 .padding(.bottom, OverlayPanel.bottomSlack)
-
-                if showPicker { picker }
             }
             .overlay {
                 if isDropTargeted { dropAffordance.frame(width: Self.width) }
@@ -151,9 +149,17 @@ struct OverlayView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
         .onAppear {
             store.applyContinuityIfNeeded()
+            recents = store.recentChats(limit: 8)
             // Initialize expanded from draft emptiness, not height, to avoid oscillation (B).
             expanded = !store.draft.isEmpty || fieldHeight > Self.lineHeight + 1
             if !store.draft.text.isEmpty || !store.draft.attachments.isEmpty { expanded = true }
+        }
+        // Retarget moves the window, not just the next show: docked is a
+        // property of the target (Frame 2 vs Frame 3), so switching chats in
+        // the menu has to drag the panel with it or the wash column lands
+        // mid-screen.
+        .onChange(of: store.draft.target) { _, _ in
+            OverlayPanel.shared.reposition()
         }
         .onChange(of: fieldHeight) { _, height in
             if height > Self.lineHeight + 1 { expanded = true }
@@ -235,11 +241,13 @@ struct OverlayView: View {
         }
     }
 
-    /// §5.8 menu — file, image, screenshot, current selection.
-    /// **Paste path is Cmd+V (ComposerField.handleImagePaste). No generic
-    /// image button here.** Screenshot capture is feasible via
-    /// CGWindowList/ScreenCaptureKit but deferred — shown disabled per gate
-    /// preference (requires Screen Recording, don't prompt).
+    /// §5.8 menu — file, screenshot. **Paste path is Cmd+V
+    /// (ComposerField.handleImagePaste). No generic image button here.**
+    /// Screenshot capture is feasible via CGWindowList/ScreenCaptureKit but
+    /// deferred — shown disabled per gate preference (requires Screen
+    /// Recording, don't prompt). Attach Selection is deliberately absent: a
+    /// selection reaches the draft through the §4.9 dictation flow, not the
+    /// menu (Anthony, 2026-09-01).
     private var addContext: some View {
         Menu {
             Button("Add File…") { pickFile() }
@@ -247,18 +255,6 @@ struct OverlayView: View {
             // Recording). Shown disabled until capture ships — no prompt now.
             Button("Screenshot of Last Focused Window") {}
                 .disabled(true)
-            Divider()
-            Button("Attach Selection") {
-                Task { @MainActor in
-                    if let sel = await Insertion.selectedText(), !sel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        let app = NSWorkspace.shared.frontmostApplication?.localizedName ?? "Unknown"
-                        store.addSelection(app: app, text: sel)
-                    } else {
-                        let app = NSWorkspace.shared.frontmostApplication?.localizedName ?? "App"
-                        store.addSelection(app: app, text: "Example selection \(store.draft.attachments.count + 1)")
-                    }
-                }
-            }
             if !store.draft.attachments.isEmpty {
                 Divider()
                 Button("Clear All", role: .destructive) {
@@ -345,22 +341,41 @@ struct OverlayView: View {
         }
     }
 
-    /// Names the current target and, from stage 4, opens the recent-chat list
-    /// (§5.3). **`New chat` is the placeholder when no chat is selected**
+    /// Names the current target and opens the recent-chat list (§5.3).
+    /// **`New chat` is the placeholder when no chat is selected**
     /// (Anthony's ruling) — not hidden and not disabled, because the control is
     /// how you reach an older chat with continuity off, so it can never be the
     /// thing that is missing.
-    /// Chevron trailing (right of label), bigger title3 semibold secondary —
-    /// HStack Image+Text inside a `Menu` label reorders icon leading, so a
-    /// single Text path was tried there. This control is a `Button` so HStack
-    /// order is preserved, but the visual spec is the same: trailing bigger.
+    ///
+    /// **The list is a native `Menu`, not the drawn custom panel** (Anthony,
+    /// 2026-09-01: same style as the `+` menu) — `rules/design.md` §1's rule:
+    /// macOS already draws menus. The label keeps the drawn capsule; the popup
+    /// is the system's, so no custom rows, checkmarks, or material here. The
+    /// chevron is static — a `Menu` exposes no open state to mirror.
+    ///
+    /// `recents` is cached and refreshed on appear and after send rather than
+    /// read in the menu content: body re-evaluates on every keystroke, and
+    /// `recentChats` parses every `chat.md` on disk each call.
     private var chatControl: some View {
-        Button { showPicker.toggle() } label: {
+        Menu {
+            Button("New chat") { store.setTarget(.new) }
+            Divider()
+            if recents.isEmpty {
+                Button("No recent chats") {}
+                    .disabled(true)
+            } else {
+                ForEach(recents) { chat in
+                    Button(chat.title ?? chat.slug) {
+                        store.setTarget(.existing(slug: chat.slug))
+                    }
+                }
+            }
+        } label: {
             HStack(spacing: 4) {
                 Text(pickerLabel)
                     .font(.callout)
                     .foregroundStyle(.secondary)
-                Image(systemName: showPicker ? "chevron.up" : "chevron.down")
+                Image(systemName: "chevron.down")
                     .font(.title3.weight(.semibold))
                     .foregroundStyle(.secondary)
             }
@@ -369,7 +384,8 @@ struct OverlayView: View {
             .background(.primary.opacity(0.07), in: .capsule)
             .fixedSize()
         }
-        .buttonStyle(.plain)
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
     }
 
     private var pickerLabel: String {
@@ -377,45 +393,6 @@ struct OverlayView: View {
         case .new: return "New chat"
         case .existing(let slug): return slug
         }
-    }
-
-    /// Chat picker below bar (§5.3) — retarget moves draft text+attachments with it.
-    private var picker: some View {
-        let recents = store.recentChats(limit: 8)
-        return VStack(alignment: .leading, spacing: 0) {
-            Button {
-                store.setTarget(.new); showPicker = false
-            } label: {
-                HStack { Text("New chat").font(.callout); Spacer(); if case .new = store.draft.target { Image(systemName: "checkmark").font(.caption2) } }
-                .padding(.horizontal, 12).frame(height: 28)
-            }.buttonStyle(.plain)
-            Divider()
-            if recents.isEmpty {
-                Text("No recent chats").font(.callout).foregroundStyle(.secondary)
-                    .padding(.horizontal, 12).frame(height: 28)
-            } else {
-                ForEach(recents) { chat in
-                    Button {
-                        store.setTarget(.existing(slug: chat.slug)); showPicker = false
-                    } label: {
-                        HStack {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(chat.title ?? chat.slug).font(.callout).lineLimit(1)
-                                Text(chat.snippet).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
-                            }
-                            Spacer()
-                            if case .existing(let s) = store.draft.target, s == chat.slug {
-                                Image(systemName: "checkmark").font(.caption2)
-                            }
-                        }
-                        .padding(.horizontal, 12).frame(height: 32)
-                    }.buttonStyle(.plain)
-                }
-            }
-        }
-        .background(.regularMaterial, in: Token.shape(radius: 12))
-        .overlay { Token.shape(radius: 12).strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5) }
-        .frame(width: Self.width)
     }
 
     /// Drag-then-summon affordance — subtle, inside the bar (§5.5).
@@ -464,7 +441,7 @@ struct OverlayView: View {
         do {
             _ = try store.send(modelID: modelID)
             expanded = false
-            showPicker = false
+            recents = store.recentChats(limit: 8)
         } catch {
             // Validation only (empty) — already guarded. Loud in chat, not HUD (§14.3).
         }
