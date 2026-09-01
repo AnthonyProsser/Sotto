@@ -40,6 +40,8 @@ struct ComposerField: NSViewRepresentable {
     /// itself. One line when empty.
     @Binding var height: CGFloat
     let onSend: () -> Void
+    /// Cmd+V image paste → chip. Stay nil for call sites that don't need it.
+    var onImagePaste: ((Data, String) -> Void)? = nil
 
     /// 15/24 from the design's caption. The size is `.title3`'s, read from the
     /// system rather than typed; only the leading is authored, because there is no
@@ -75,6 +77,7 @@ struct ComposerField: NSViewRepresentable {
 
         field.delegate = context.coordinator
         field.onSend = onSend
+        field.onImagePaste = onImagePaste
         field.font = Self.font
         field.defaultParagraphStyle = Self.paragraphStyle
         field.typingAttributes = [
@@ -113,6 +116,7 @@ struct ComposerField: NSViewRepresentable {
     func updateNSView(_ scroll: NSScrollView, context: Context) {
         guard let field = scroll.documentView as? TextView else { return }
         field.onSend = onSend
+        field.onImagePaste = onImagePaste
         if field.string != text { field.string = text }
         context.coordinator.report(field)
         context.coordinator.keepFocus(field)
@@ -198,9 +202,10 @@ struct ComposerField: NSViewRepresentable {
         }
     }
 
-    /// Return, Shift-Return, and Escape — the whole keyboard rule.
+    /// Return, Shift-Return, Escape, and Cmd+V image paste — the whole keyboard rule.
     final class TextView: NSTextView {
         var onSend: () -> Void = {}
+        var onImagePaste: ((Data, String) -> Void)? = nil
 
         override func insertNewline(_ sender: Any?) {
             // **Shift is read from the event, not from a second selector.**
@@ -238,6 +243,46 @@ struct ComposerField: NSViewRepresentable {
         /// its turn.
         override func cancelOperation(_ sender: Any?) {
             nextResponder?.tryToPerform(#selector(cancelOperation(_:)), with: sender)
+        }
+
+        /// **Cmd+V image paste (§5.5).** Images become draft attachments (chips), not
+        /// inserted text. Text paste falls through to AppKit.
+        override func paste(_ sender: Any?) {
+            if handleImagePaste() { return }
+            super.paste(sender)
+        }
+
+        override func pasteAsPlainText(_ sender: Any?) {
+            if handleImagePaste() { return }
+            super.pasteAsPlainText(sender)
+        }
+
+        private func handleImagePaste() -> Bool {
+            let pb = NSPasteboard.general
+            // Direct image data (screenshot Cmd+Ctrl+Shift+4, browser copy).
+            if let tiff = pb.data(forType: .tiff), let img = NSImage(data: tiff), let rep = img.tiffRepresentation {
+                // Prefer PNG if available.
+                if let png = pb.data(forType: .png) {
+                    onImagePaste?(png, "pasted-\(UUID().uuidString.prefix(4)).png"); return true
+                }
+                onImagePaste?(rep, "pasted-\(UUID().uuidString.prefix(4)).png"); return true
+            }
+            if let png = pb.data(forType: .png) {
+                onImagePaste?(png, "pasted-\(UUID().uuidString.prefix(4)).png"); return true
+            }
+            // File URLs (Finder copy).
+            if let items = pb.pasteboardItems {
+                for item in items {
+                    if let str = item.string(forType: .fileURL), let url = URL(string: str) {
+                        let ext = url.pathExtension.lowercased()
+                        if ["png","jpg","jpeg","webp","heic","gif","tiff","bmp"].contains(ext),
+                           let data = try? Data(contentsOf: url) {
+                            onImagePaste?(data, url.lastPathComponent); return true
+                        }
+                    }
+                }
+            }
+            return false
         }
     }
 }

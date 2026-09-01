@@ -68,13 +68,27 @@ final class OverlayPanel {
     /// screen and passes its clicks through.
     private static let topSlack: CGFloat = 24
 
+    /// Room **below** the bar for the drop shadow to paint into. Without it the
+    /// SwiftUI `.shadow` extends beyond `contentView` and is clipped by the window
+    /// edge, so the shadow reads as cut off (the white-background screenshot that
+    /// prompted this). Exponential shadow (y4 r6 + y10 r16 + y18 r32) needs ~40 pt
+    /// inclusive of blur, so this is 36 to keep the fade from hard-clipping.
+    static let bottomSlack: CGFloat = 36
+
     /// Side slack, so the glass can bleed its rim and specular edge outside the
     /// bar's own rect without the window clipping them.
     private static let sideSlack: CGFloat = 24
 
     private var panel: Panel?
+    var isVisible: Bool { panel?.isVisible == true }
 
-    private init() {}
+    private init() {
+        // FINDING 2026-08-27: panel stops putting windows on screen after sleep.
+        // Cheapest mitigation: rebuild on wake.
+        NotificationCenter.default.addObserver(
+            forName: NSWorkspace.didWakeNotification, object: nil, queue: .main
+        ) { [weak self] _ in self?.panel = nil }
+    }
 
     // MARK: - Showing
 
@@ -86,13 +100,31 @@ final class OverlayPanel {
     }
 
     /// Whoever was frontmost when the overlay opened, so `hide()` can hand focus
-    /// back. Stage 4's retarget needs the same reference for a different reason;
-    /// one property, not two.
-    private weak var previousApp: NSRunningApplication?
+    /// back. Held **strongly**, not weak — `NSWorkspace.frontmostApplication`
+    /// returns an autoreleased instance and the weak slot was nil-ing by the time
+    /// `hide()` ran (observed as focus not returning after Esc/double-Option).
+    /// Stage 4's retarget needs the same reference for a different reason; one
+    /// property, not two.
+    private var previousApp: NSRunningApplication?
 
     func show() {
         let panel = self.panel ?? make()
+        // Resize canvas if screen changed since panel was created (§5.8 cap rule).
+        if let screen = NSScreen.main ?? NSScreen.screens.first {
+            let desired = OverlayView.maxHeight(for: screen) + Self.topSlack + Self.bottomSlack
+            if abs(panel.frame.height - desired) > 1 {
+                var f = panel.frame
+                // Keep bottom edge pinned — grow upward.
+                f.origin.y -= desired - f.height
+                f.size.height = desired
+                panel.setFrame(f, display: false)
+                panel.contentView?.frame = NSRect(origin: .zero, size: f.size)
+            }
+        }
         position(panel)
+        // Resolve continuity target before showing (§5.3) — use B's resolver name
+        // but keep A alias via DraftStore.applyContinuityIfNeeded.
+        DraftStore.shared.resolveContinuityIfNeeded()
         previousApp = NSWorkspace.shared.frontmostApplication
 
         // **Sotto activates, and that is deliberate** (Anthony, 2026-08-27: "I
@@ -125,37 +157,62 @@ final class OverlayPanel {
     }
 
     func hide() {
+        let previous = previousApp
+        previousApp = nil
         panel?.orderOut(nil)
         Activity.shared.set(.overlay, false)
-        // Put the user back where they were — but only if they are still here.
-        // If they clicked into something else while the overlay was up, that is
-        // now their focus and yanking it back would be the theft this surface is
-        // supposed to avoid.
-        //
-        // `activate(from:options:)` rather than the bare `activate()`, for the
-        // mirror of the reason `show()` needs `ignoringOtherApps` — this is the
-        // cooperative handoff macOS 14 added, and Sotto is the active app here,
-        // so it is the one call that is allowed to give focus away. Without it
-        // activation falls to the Finder (measured 2026-08-27).
-        if NSApp.isActive { previousApp?.activate(from: .current) }
-        previousApp = nil
+        // Always hand focus back. The previous slot is now strong (was weak and
+        // nil-ing before the handoff ran), so the app that was frontmost before
+        // `show()` is reliably still there. `orderOut` first so the activation
+        // does not fight `makeKeyAndOrderFront`. Try the cooperative
+        // `activate(from:)` first (denied without it on macOS 14), fall back to
+        // `activate(options:)`.
+        guard let app = previous, app.bundleIdentifier != Bundle.main.bundleIdentifier else {
+            // No previous or previous was Sotto — just resign.
+            if NSApp.isActive { NSApp.deactivate() }
+            return
+        }
+        DispatchQueue.main.async {
+            if !app.activate(from: .current) {
+                _ = app.activate(options: [.activateAllWindows, .activateIgnoringOtherApps])
+            }
+        }
     }
 
     // MARK: - The panel
 
-    /// Escape closes the overlay, which is item 4 of §10.4's priority stack and
-    /// the whole of what this stage owns. Items 1 and 2 belong to the gesture and
-    /// live in `GestureRecognizer`; item 3 arrives with generation.
+    /// **Escape priority stack §10.4.** Exactly one action fires top-down:
+    /// 1 abort gesture (GestureRecognizer), 2 cancel transcription (EventTap),
+    /// 3 stop chat generation, 4 close overlay. Slice 13's scrim preempts all four.
     ///
     /// **No global monitor.** The panel is key while it is up, so Escape reaches
     /// it as `cancelOperation(_:)` through the responder chain and is never
-    /// swallowed system-wide (§10.4's standing constraint).
+    /// swallowed system-wide (§10.4's standing constraint). Items 1-2 live on the
+    /// tap; 3-4 live here so priority 3 can be checked before 4 without a second
+    /// mechanism.
     private final class Panel: NSPanel {
         /// The whole reason for the subclass. Borderless panels return false, and
         /// false here means no caret and no typing.
         override var canBecomeKey: Bool { true }
 
         override func cancelOperation(_ sender: Any?) {
+            // §10.4 exactly one top-down: scrim preempts, then 1/2 already
+            // handled on the tap, then 3/4 here. No global monitor when idle
+            // is enforced in EventTap; this handler only runs when the panel
+            // is key (spec: "panel cancelOperation is handler when key").
+            if EventTap.escapeHandledOnMain {
+                EventTap.escapeHandledOnMain = false
+                return
+            }
+            // Scrim preempts all four (§10.4, slice 13).
+            // if Scrim.shared.isPresented { Scrim.shared.dismiss(); return }
+            // Priority 3: stop chat generation before closing.
+            if Activity.shared.active.contains(.generating) {
+                Activity.shared.set(.generating, false)
+                NotificationCenter.default.post(name: .sottoCancelGeneration, object: nil)
+                return
+            }
+            // Priority 4: close overlay.
             OverlayPanel.shared.hide()
         }
 
@@ -175,9 +232,11 @@ final class OverlayPanel {
     }
 
     private func make() -> Panel {
+        let screen = NSScreen.main ?? NSScreen.screens.first
+        let cap = screen.map { OverlayView.maxHeight(for: $0) } ?? 320
         let size = NSSize(
             width: OverlayView.width + Self.sideSlack * 2,
-            height: OverlayView.maxHeight + Self.topSlack
+            height: cap + Self.topSlack + Self.bottomSlack
         )
         let panel = Panel(
             contentRect: NSRect(origin: .zero, size: size),
@@ -246,8 +305,16 @@ final class OverlayPanel {
 
     private func position(_ panel: Panel) {
         guard let screen = NSScreen.main ?? NSScreen.screens.first else { return }
+        // Frame 2: right-docked 560pt wash column; Frame 3: centered bare bar (gap 1 closed).
+        let isDocked: Bool = {
+            if case .existing = DraftStore.shared.draft.target { return true }
+            return false
+        }()
+        let x: CGFloat = isDocked
+            ? screen.visibleFrame.maxX - panel.frame.width // right-docked, no panel edge
+            : screen.frame.midX - panel.frame.width / 2 // centered bare bar
         panel.setFrameOrigin(NSPoint(
-            x: screen.frame.midX - panel.frame.width / 2,
+            x: x,
             y: screen.visibleFrame.minY + Self.dockClearance
         ))
     }

@@ -40,6 +40,11 @@ final class EventTap {
     /// one action fires" true rather than hoped for.
     private var abortedThisEvent = false
 
+    /// Coordinated with `OverlayPanel.Panel.cancelOperation` to ensure exactly
+    /// one action per Esc press top-down (§10.4). Set synchronously on main
+    /// when 1 or 2 fires on the tap, read by the panel before it tries 3/4.
+    static var escapeHandledOnMain: Bool = false
+
     private init() {}
 
     /// The keycodes this file compares against, and the complete list.
@@ -202,10 +207,35 @@ final class EventTap {
             let isEscape = keycode == Key.escape
             abortedThisEvent = false
             disposition = recognizer.handle(.otherKeyDown(isEscape: isEscape))
-            if isEscape, !abortedThisEvent {
-                // Priority 2. Priorities 3 and 4 are slice 9's and go on the end
-                // of this chain, each returning whether it fired.
-                DispatchQueue.main.async { Dictation.shared.cancelTranscription() }
+            if isEscape {
+                DispatchQueue.main.sync { Self.escapeHandledOnMain = false }
+                // §10.4 top-down, exactly one. Check isIdle synchronously —
+                // no global monitor when idle, and panel is handler when key.
+                var isIdle = true
+                // Activity is @MainActor, read synchronously via main queue.
+                // Tap thread must not block, but Esc is rare and main is not
+                // contended here; sync is cheaper than async + race.
+                if Thread.isMainThread {
+                    isIdle = Activity.shared.isIdle
+                } else {
+                    DispatchQueue.main.sync { isIdle = Activity.shared.isIdle }
+                }
+                if isIdle {
+                    // No monitor — pass through, no action.
+                } else if abortedThisEvent {
+                    // Priority 1 fired on this tap (GestureRecognizer).
+                    DispatchQueue.main.sync { Self.escapeHandledOnMain = true }
+                } else {
+                    // Priority 2 — try on main, synchronously so panel sees result.
+                    var handled2 = false
+                    DispatchQueue.main.sync {
+                        handled2 = Dictation.shared.cancelTranscription()
+                        if handled2 { Self.escapeHandledOnMain = true }
+                    }
+                    // Priorities 3/4 live in OverlayPanel.Panel.cancelOperation
+                    // and will check escapeHandledOnMain before firing.
+                    _ = handled2
+                }
             }
         case .keyUp:
             disposition = recognizer.handle(.otherKeyUp)

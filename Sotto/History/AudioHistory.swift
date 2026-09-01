@@ -341,4 +341,5 @@ extension Notification.Name {
     /// to serve a window that is usually closed. `CLAUDE.md` §2's "nothing is a
     /// notification" is about the user-facing kind — this one is `NotificationCenter`.
     static let audioHistoryDidChange = Notification.Name("SottoAudioHistoryDidChange")
+    static let sottoCancelGeneration = Notification.Name("SottoCancelGeneration")
 }

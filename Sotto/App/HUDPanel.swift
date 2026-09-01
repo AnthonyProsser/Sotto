@@ -296,8 +296,19 @@ final class HUDPanel {
             position(panel)
             // Not `makeKeyAndOrderFront`: the HUD appears while the user is typing
             // into another app, and taking key would move focus out from under
-            // them mid-sentence.
+            // them mid-sentence. `orderFrontRegardless` is required for fullscreen
+            // Spaces — a plain `orderFront` is clipped to the app's Space.
+            // Re-assert level/collectionBehavior before ordering: wake invalidation
+            // rebuilds, and a stale panel orphaned across a Space change may have
+            // lost its auxiliary status.
+            panel.level = .popUpMenu
+            panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle, .transient]
             panel.orderFrontRegardless()
+            // Nudge window server if still not visible (observed on fullscreen
+            // repro where windowNumber stayed <=0 after orderFront).
+            if !panel.isVisible || panel.windowNumber <= 0 {
+                panel.orderFrontRegardless()
+            }
         }
         return panel
     }
@@ -318,14 +329,20 @@ final class HUDPanel {
         // shadow would fall from the canvas, not from the visible surface.
         panel.hasShadow = false
         panel.ignoresMouseEvents = true
-        // Above the menu bar, so the HUD is not clipped by it at small top
-        // insets, and above ordinary floating windows.
-        panel.level = .statusBar
+        // Above the menu bar and above fullscreen windows. `.popUpMenu` (101) sits
+        // above `.statusBar` (25) and is still below `.screenSaver` (1000); the
+        // HUD is transient dictation feedback and must be visible even when T3
+        // Code is fullscreen — `statusBar` was not reliably above a fullscreen
+        // Space's window ordering, while `popUpMenu` is. Verified against T3 Code
+        // fullscreen repro where HUD was not appearing at `.statusBar`.
+        panel.level = .popUpMenu
         // `.fullScreenAuxiliary` is what makes the HUD visible over a fullscreen
         // app, and `.canJoinAllSpaces` is what stops it being left behind on the
         // Space the gesture started in. Dictation into a fullscreen editor is a
-        // first-class case, so neither is optional.
-        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
+        // first-class case, so neither is optional. `.transient` ensures it does
+        // not appear in Mission Control and is ordered correctly for auxiliary
+        // windows.
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle, .transient]
 
         let host = NSHostingView(rootView: HUDView(state: state, appearance: appearance, running: running))
         host.frame = NSRect(origin: .zero, size: Self.canvas)

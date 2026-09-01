@@ -7,6 +7,8 @@
 //
 
 import SwiftUI
+import AppKit
+import UniformTypeIdentifiers
 
 /// The compose surface: add-context `+`, message field, chat control, send
 /// (§5.8).
@@ -58,12 +60,21 @@ struct OverlayView: View {
     /// here and 20 keeps 6 pt of flat edge, so the corner is a real squircle.
     static let radius: CGFloat = 20
 
-    /// The panel's canvas budget: chips wrapped to three rows, a field at its
-    /// 144 pt cap, a control row, and the padding around them. The window is made
-    /// this tall once and never resized — the surface grows *inside* it, which is
-    /// cheaper than resizing a window on every keystroke and is why the bar can be
-    /// bottom-anchored with a single `setFrameOrigin`.
-    static let maxHeight: CGFloat = 320
+    /// **70 % of usable display height, then the conversation scrolls** (Anthony
+    /// 2026-08-27 six answers (2) — §5.8's 720 pt companion does not survive
+    /// because there is no panel to bound). Replaces the 2026-08-27 placeholder
+    /// 320. The window is made this tall once per show and the surface grows
+    /// *inside* it — cheaper than resizing on every keystroke and keeps the bottom
+    /// edge still without moving the origin.
+    /// Primary — optional to allow `NSScreen.main` nil fallback. Clamped to >=320.
+    static func maxHeight(for screen: NSScreen?) -> CGFloat {
+        let h = (screen?.visibleFrame.height ?? 800) * 0.70
+        return max(h, 320)
+    }
+
+    static func maxHeight(for screen: NSScreen) -> CGFloat { maxHeight(for: screen as NSScreen?) }
+    @available(*, deprecated, message: "Use maxHeight(for:)")
+    static let maxHeight: CGFloat = OverlayView.maxHeight(for: NSScreen.main)
 
     /// Left and right of the row. 14 pt from the design's caption.
     private static let padding: CGFloat = 14
@@ -84,38 +95,79 @@ struct OverlayView: View {
     /// for why it is not the drawn 144.
     private static let fieldMaxLines = 6
 
-    @State private var text = ""
-    @State private var attachments: [String] = []
+    @State private var store = DraftStore.shared
     @State private var fieldHeight: CGFloat = OverlayView.lineHeight
     @State private var expanded = false
+    @State private var showPicker = false
+    @State private var isDropTargeted = false
+
+    private var draft: Draft { store.draft }
+    private var textBinding: Binding<String> {
+        Binding(get: { store.draft.text }, set: { store.draft.text = $0 })
+    }
 
     var body: some View {
-        GlassEffectContainer(spacing: 0) {
-            composer
-                .frame(width: Self.width)
-                // Applied last so it captures the content above it, and the shape
-                // is passed to `in:` rather than clipped afterwards — a later
-                // `.clipShape` would cut the specular edge and the rim refraction
-                // the material draws outside the path (`rules/design.md` §6.1).
-                .glassEffect(Token.Material.overlay, in: Token.shape(radius: Self.radius))
+        ZStack(alignment: .bottom) {
+            // FINDING 2026-08-27 wash (a): single gradient-masked NSVisualEffectView.
+            // Bare bar (Frame 3, .new) has no wash; docked column (Frame 2, .existing)
+            // shows it. Covers the panel canvas so composition can be judged at real
+            // size on varied wallpapers (§9e gate).
+            if case .existing = store.draft.target {
+                WashView().frame(width: WashView.columnWidth)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)
+                    .ignoresSafeArea()
+                    .allowsHitTesting(false)
+            }
+            VStack(spacing: 8) {
+                GlassEffectContainer(spacing: 0) {
+                    composer
+                        .frame(width: Self.width)
+                        // Applied last so it captures the content above it, and the shape
+                        // is passed to `in:` rather than clipped afterwards — a later
+                        // `.clipShape` would cut the specular edge and the rim refraction
+                        // the material draws outside the path (`rules/design.md` §6.1).
+                        .glassEffect(Token.Material.overlay, in: Token.shape(radius: Self.radius))
+                }
+                // The same rim the HUD wears, from the same one implementation.
+                .specularRim(radius: Self.radius)
+                // Exponential drop shadow — not a single hard edge (B). Needs bottomSlack.
+                .shadow(color: Color.black.opacity(0.10), radius: 6, x: 0, y: 4)
+                .shadow(color: Color.black.opacity(0.08), radius: 16, x: 0, y: 10)
+                .shadow(color: Color.black.opacity(0.05), radius: 32, x: 0, y: 18)
+                // Lift bar above window edge so shadow paints — clipped otherwise.
+                .padding(.bottom, OverlayPanel.bottomSlack)
+
+                if showPicker { picker }
+            }
+            .overlay {
+                if isDropTargeted { dropAffordance.frame(width: Self.width) }
+            }
+            .onDrop(of: [.image, .fileURL, .png, .tiff], isTargeted: $isDropTargeted, perform: handleDrop)
         }
-        // The same rim the HUD wears, from the same one implementation. The
-        // design's flat "0.5 pt @ 9 % light / 12 % dark" stroke is the mockup's
-        // stand-in for a lit edge, which is what `Specular` already is.
-        .specularRim(radius: Self.radius)
         // The panel is taller than the bar so the surface can grow without
         // resizing the window, so the bar has to say where in that canvas it
         // sits: bottom-centred, because growth is upward from a fixed bottom edge
         // (§5.8).
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+        .onAppear {
+            store.applyContinuityIfNeeded()
+            // Initialize expanded from draft emptiness, not height, to avoid oscillation (B).
+            expanded = !store.draft.isEmpty || fieldHeight > Self.lineHeight + 1
+            if !store.draft.text.isEmpty || !store.draft.attachments.isEmpty { expanded = true }
+        }
         .onChange(of: fieldHeight) { _, height in
             if height > Self.lineHeight + 1 { expanded = true }
         }
-        .onChange(of: attachments) { _, chips in
+        .onChange(of: store.draft.attachments) { _, chips in
             if !chips.isEmpty { expanded = true }
+            else if store.draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { expanded = false }
         }
-        .onChange(of: text) { _, draft in
-            if draft.isEmpty && attachments.isEmpty { expanded = false }
+        .onChange(of: store.draft.text) { _, t in
+            if t.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && store.draft.attachments.isEmpty { expanded = false }
+            if store.draft.isEmpty { expanded = false }
+        }
+        .onChange(of: store.draft.isEmpty) { _, isEmpty in
+            if isEmpty { expanded = false }
         }
     }
 
@@ -141,7 +193,7 @@ struct OverlayView: View {
 
     private var stacked: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if !attachments.isEmpty {
+            if !store.draft.attachments.isEmpty {
                 chips
                 Spacer(minLength: 0).frame(height: Self.chipsGap)
             }
@@ -166,7 +218,7 @@ struct OverlayView: View {
             // Placeholder only, no label (§5.8). Drawn rather than asked for:
             // `NSTextView` has no placeholder, and the alternative is the private
             // `placeholderString` key.
-            if text.isEmpty {
+            if store.draft.text.isEmpty {
                 Text("Message")
                     .font(.title3)
                     .foregroundStyle(Color(nsColor: .placeholderTextColor))
@@ -174,20 +226,45 @@ struct OverlayView: View {
                     .allowsHitTesting(false)
             }
             ComposerField(
-                text: $text,
+                text: textBinding,
                 maxLines: Self.fieldMaxLines,
                 height: $fieldHeight,
-                onSend: send
+                onSend: send,
+                onImagePaste: { data, name in store.addImage(filename: name, data: data) }
             )
         }
     }
 
-    /// Stage 4 gives it the §5.8 menu — file, image, screenshot, current
-    /// selection. Until then it seeds a chip, so the wrapping row and the per-chip
-    /// dismiss are exercisable rather than theoretical.
+    /// §5.8 menu — file, image, screenshot, current selection.
+    /// **Paste path is Cmd+V (ComposerField.handleImagePaste). No generic
+    /// image button here.** Screenshot capture is feasible via
+    /// CGWindowList/ScreenCaptureKit but deferred — shown disabled per gate
+    /// preference (requires Screen Recording, don't prompt).
     private var addContext: some View {
-        Button {
-            attachments.append("Screenshot \(attachments.count + 1)")
+        Menu {
+            Button("Add File…") { pickFile() }
+            // Feasible via CGWindowList / ScreenCaptureKit (requires Screen
+            // Recording). Shown disabled until capture ships — no prompt now.
+            Button("Screenshot of Last Focused Window") {}
+                .disabled(true)
+            Divider()
+            Button("Attach Selection") {
+                Task { @MainActor in
+                    if let sel = await Insertion.selectedText(), !sel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        let app = NSWorkspace.shared.frontmostApplication?.localizedName ?? "Unknown"
+                        store.addSelection(app: app, text: sel)
+                    } else {
+                        let app = NSWorkspace.shared.frontmostApplication?.localizedName ?? "App"
+                        store.addSelection(app: app, text: "Example selection \(store.draft.attachments.count + 1)")
+                    }
+                }
+            }
+            if !store.draft.attachments.isEmpty {
+                Divider()
+                Button("Clear All", role: .destructive) {
+                    store.setAttachments([])
+                }
+            }
         } label: {
             Image(systemName: "plus")
                 // Same style as the field it sits beside, so the glyph tracks the
@@ -197,7 +274,27 @@ struct OverlayView: View {
                 .frame(width: Self.control, height: Self.control)
                 .contentShape(.rect)
         }
-        .buttonStyle(.plain)
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+    }
+
+    private func pickFile() {
+        // Overlay is at .statusBar (25) and would occlude the open panel at
+        // .modalPanel (8). Hide it for the modal, then restore.
+        let wasVisible = OverlayPanel.shared.isVisible
+        if wasVisible { OverlayPanel.shared.hide() }
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.allowedContentTypes = [.image]
+        let result = panel.runModal()
+        if result == .OK, let url = panel.url, let data = try? Data(contentsOf: url) {
+            store.addImage(filename: url.lastPathComponent, data: data)
+        }
+        if wasVisible {
+            // Restore on next runloop so panel ordering settles.
+            DispatchQueue.main.async { OverlayPanel.shared.show() }
+        }
     }
 
     /// §14.3 rejects a *saturated* send button, not a send button. 7 % ink behind
@@ -217,19 +314,22 @@ struct OverlayView: View {
                 .background(.primary.opacity(0.07), in: .circle)
         }
         .buttonStyle(.plain)
+        .disabled(store.draft.isEmpty)
+        .keyboardShortcut(.return, modifiers: [])
     }
 
     /// Attachments wrap above the field and count toward intrinsic height (§5.8).
     /// Accent is on the chips and the caret and nowhere else, per Frame 1's
     /// caption — `Color.accentColor` is `controlAccentColor`, so the design's
     /// `#0A84FF` stays a stand-in and is never typed.
+    /// Each chip has dismiss — correctness, not convenience (§4.9 accidental attachment).
     private var chips: some View {
         WrapLayout(spacing: 6, lineSpacing: 6) {
-            ForEach(attachments, id: \.self) { name in
+            ForEach(Array(store.draft.attachments.enumerated()), id: \.element.id) { index, att in
                 HStack(spacing: 5) {
-                    Text(name).font(.callout).lineLimit(1)
+                    Text(att.chipLabel).font(.callout).lineLimit(1)
                     Button {
-                        attachments.removeAll { $0 == name }
+                        store.removeAttachment(at: index)
                     } label: {
                         Image(systemName: "xmark")
                             .font(.caption2.weight(.semibold))
@@ -250,34 +350,124 @@ struct OverlayView: View {
     /// (Anthony's ruling) — not hidden and not disabled, because the control is
     /// how you reach an older chat with continuity off, so it can never be the
     /// thing that is missing.
-    ///
-    /// Frame 3's dashed-accent pill is the *pending* treatment and belongs with
-    /// stage 4; nothing here is pending yet, so this is drawn plain.
+    /// Chevron trailing (right of label), bigger title3 semibold secondary —
+    /// HStack Image+Text inside a `Menu` label reorders icon leading, so a
+    /// single Text path was tried there. This control is a `Button` so HStack
+    /// order is preserved, but the visual spec is the same: trailing bigger.
     private var chatControl: some View {
-        HStack(spacing: 4) {
-            Text("New chat")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-            Image(systemName: "chevron.down")
-                // The smallest named style, which is what a disclosure chevron
-                // wants; a literal here would author a size for one glyph.
-                .font(.caption2.weight(.semibold))
-                .foregroundStyle(.tertiary)
+        Button { showPicker.toggle() } label: {
+            HStack(spacing: 4) {
+                Text(pickerLabel)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                Image(systemName: showPicker ? "chevron.up" : "chevron.down")
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 10)
+            .frame(height: Self.control)
+            .background(.primary.opacity(0.07), in: .capsule)
+            .fixedSize()
         }
-        .padding(.horizontal, 10)
-        .frame(height: Self.control)
-        .background(.primary.opacity(0.07), in: .capsule)
-        .fixedSize()
+        .buttonStyle(.plain)
     }
 
-    /// Stage 3 owns the draft and where it goes. Until it exists, sending is the
-    /// part that is observable — the surface empties and returns to Frame 1 —
-    /// which is what stage 2 needs to show the transition working in both
-    /// directions.
+    private var pickerLabel: String {
+        switch store.draft.target {
+        case .new: return "New chat"
+        case .existing(let slug): return slug
+        }
+    }
+
+    /// Chat picker below bar (§5.3) — retarget moves draft text+attachments with it.
+    private var picker: some View {
+        let recents = store.recentChats(limit: 8)
+        return VStack(alignment: .leading, spacing: 0) {
+            Button {
+                store.setTarget(.new); showPicker = false
+            } label: {
+                HStack { Text("New chat").font(.callout); Spacer(); if case .new = store.draft.target { Image(systemName: "checkmark").font(.caption2) } }
+                .padding(.horizontal, 12).frame(height: 28)
+            }.buttonStyle(.plain)
+            Divider()
+            if recents.isEmpty {
+                Text("No recent chats").font(.callout).foregroundStyle(.secondary)
+                    .padding(.horizontal, 12).frame(height: 28)
+            } else {
+                ForEach(recents) { chat in
+                    Button {
+                        store.setTarget(.existing(slug: chat.slug)); showPicker = false
+                    } label: {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(chat.title ?? chat.slug).font(.callout).lineLimit(1)
+                                Text(chat.snippet).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                            }
+                            Spacer()
+                            if case .existing(let s) = store.draft.target, s == chat.slug {
+                                Image(systemName: "checkmark").font(.caption2)
+                            }
+                        }
+                        .padding(.horizontal, 12).frame(height: 32)
+                    }.buttonStyle(.plain)
+                }
+            }
+        }
+        .background(.regularMaterial, in: Token.shape(radius: 12))
+        .overlay { Token.shape(radius: 12).strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5) }
+        .frame(width: Self.width)
+    }
+
+    /// Drag-then-summon affordance — subtle, inside the bar (§5.5).
+    /// Accent wash + dashed border only; no label — color change is enough.
+    /// Distinct from HUD's "Copied to clipboard" morph (bottom, solid, fades).
+    private var dropAffordance: some View {
+        Token.shape(radius: Self.radius)
+            .fill(Color.accentColor.opacity(0.08))
+            .overlay {
+                Token.shape(radius: Self.radius)
+                    .strokeBorder(Color.accentColor.opacity(0.45), style: StrokeStyle(lineWidth: 1.25, dash: [6, 5]))
+            }
+            .allowsHitTesting(false)
+    }
+
+    private func handleDrop(providers: [NSItemProvider]) -> Bool {
+        for p in providers {
+            if p.hasItemConformingToTypeIdentifier("public.image") {
+                p.loadDataRepresentation(forTypeIdentifier: "public.image") { data, _ in
+                    if let data { Task { @MainActor in store.addImage(filename: "dropped-\(UUID().uuidString.prefix(4)).png", data: data) } }
+                }
+                return true
+            }
+            if p.hasItemConformingToTypeIdentifier("public.file-url") {
+                p.loadItem(forTypeIdentifier: "public.file-url", options: nil) { item, _ in
+                    if let data = item as? Data, let url = URL(dataRepresentation: data, relativeTo: nil),
+                       let fileData = try? Data(contentsOf: url) {
+                        let name = url.lastPathComponent
+                        Task { @MainActor in store.addImage(filename: name, data: fileData) }
+                    } else if let url = item as? URL, let fileData = try? Data(contentsOf: url) {
+                        Task { @MainActor in store.addImage(filename: url.lastPathComponent, data: fileData) }
+                    }
+                }
+                return true
+            }
+        }
+        return false
+    }
+
+    /// Commits draft to a chat folder — attachments serialize before text (§5.2).
     private func send() {
-        text = ""
-        attachments = []
-        expanded = false
+        let trimmed = store.draft.serializedMessage.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        // Resolve model — current chat model if available, else apple-foundation.
+        let modelID = UserDefaults.standard.string(forKey: "ChatModelID") ?? "apple-foundation"
+        do {
+            _ = try store.send(modelID: modelID)
+            expanded = false
+            showPicker = false
+        } catch {
+            // Validation only (empty) — already guarded. Loud in chat, not HUD (§14.3).
+        }
     }
 }
 
