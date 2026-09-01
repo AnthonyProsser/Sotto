@@ -100,47 +100,29 @@ struct OverlayView: View {
     @State private var expanded = false
     @State private var recents: [DraftStore.RecentChat] = []
     @State private var isDropTargeted = false
+    /// Bumped after a send so the conversation body re-reads `chat.md`.
+    @State private var conversationReload = 0
 
     private var draft: Draft { store.draft }
     private var textBinding: Binding<String> {
         Binding(get: { store.draft.text }, set: { store.draft.text = $0 })
     }
+    private var isDocked: Bool {
+        if case .existing = store.draft.target { return true }
+        return false
+    }
+    private var slug: String {
+        if case .existing(let slug) = store.draft.target { return slug }
+        return ""
+    }
 
     var body: some View {
         ZStack(alignment: .bottom) {
-            // FINDING 2026-08-27 wash (a): single gradient-masked NSVisualEffectView.
-            // Bare bar (Frame 3, .new) has no wash; docked column (Frame 2, .existing)
-            // shows it. Covers the panel canvas so composition can be judged at real
-            // size on varied wallpapers (§9e gate).
-            if case .existing = store.draft.target {
-                WashView().frame(width: WashView.columnWidth)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)
-                    .ignoresSafeArea()
-                    .allowsHitTesting(false)
+            if isDocked {
+                dockedPanel
+            } else {
+                bareBar
             }
-            VStack(spacing: 8) {
-                GlassEffectContainer(spacing: 0) {
-                    composer
-                        .frame(width: Self.width)
-                        // Applied last so it captures the content above it, and the shape
-                        // is passed to `in:` rather than clipped afterwards — a later
-                        // `.clipShape` would cut the specular edge and the rim refraction
-                        // the material draws outside the path (`rules/design.md` §6.1).
-                        .glassEffect(Token.Material.overlay, in: Token.shape(radius: Self.radius))
-                }
-                // The same rim the HUD wears, from the same one implementation.
-                .specularRim(radius: Self.radius)
-                // Exponential drop shadow — not a single hard edge (B). Needs bottomSlack.
-                .shadow(color: Color.black.opacity(0.10), radius: 6, x: 0, y: 4)
-                .shadow(color: Color.black.opacity(0.08), radius: 16, x: 0, y: 10)
-                .shadow(color: Color.black.opacity(0.05), radius: 32, x: 0, y: 18)
-                // Lift bar above window edge so shadow paints — clipped otherwise.
-                .padding(.bottom, OverlayPanel.bottomSlack)
-            }
-            .overlay {
-                if isDropTargeted { dropAffordance.frame(width: Self.width) }
-            }
-            .onDrop(of: [.image, .fileURL, .png, .tiff], isTargeted: $isDropTargeted, perform: handleDrop)
         }
         // The panel is taller than the bar so the surface can grow without
         // resizing the window, so the bar has to say where in that canvas it
@@ -175,6 +157,93 @@ struct OverlayView: View {
         .onChange(of: store.draft.isEmpty) { _, isEmpty in
             if isEmpty { expanded = false }
         }
+    }
+
+    /// Frame 3: the centred 600 pt bar, no wash — unchanged by the panel rework
+    /// (gap 1's ruling keeps the bare state a floating bar).
+    private var bareBar: some View {
+        VStack(spacing: 8) {
+            GlassEffectContainer(spacing: 0) {
+                composer
+                    .frame(width: Self.width)
+                    // Applied last so it captures the content above it, and the shape
+                    // is passed to `in:` rather than clipped afterwards — a later
+                    // `.clipShape` would cut the specular edge and the rim refraction
+                    // the material draws outside the path (`rules/design.md` §6.1).
+                    .glassEffect(Token.Material.overlay, in: Token.shape(radius: Self.radius))
+            }
+            // The same rim the HUD wears, from the same one implementation.
+            .specularRim(radius: Self.radius)
+            // Exponential drop shadow — not a single hard edge (B). Needs bottomSlack.
+            .shadow(color: Color.black.opacity(0.10), radius: 6, x: 0, y: 4)
+            .shadow(color: Color.black.opacity(0.08), radius: 16, x: 0, y: 10)
+            .shadow(color: Color.black.opacity(0.05), radius: 32, x: 0, y: 18)
+            // Lift bar above window edge so shadow paints — clipped otherwise.
+            .padding(.bottom, OverlayPanel.bottomSlack)
+        }
+        .overlay {
+            if isDropTargeted { dropAffordance.frame(width: Self.width) }
+        }
+        .onDrop(of: [.image, .fileURL, .png, .tiff], isTargeted: $isDropTargeted, perform: handleDrop)
+    }
+
+    /// Frame 2, rebuilt per "Chat panel light and dark mode.pdf" (2026-09-01):
+    /// a 500 pt wash field bottom-right, the conversation read-only above the
+    /// in-panel composer. The field hugs its content — top padding 24 is the
+    /// drawing's "top edge 24 pt above the first line of text"; the bottom sits
+    /// at the panel anchor, 16 pt above `visibleFrame` (the drawn 15 within
+    /// rounding) — and the canvas caps it at 70 % of usable height, where the
+    /// conversation body becomes the sole scroll region (§5.8).
+    private var dockedPanel: some View {
+        VStack(spacing: 0) {
+            ConversationView(
+                slug: slug,
+                maxHeight: OverlayView.maxHeight(for: NSScreen.main) - 150,
+                reload: conversationReload
+            )
+            Spacer(minLength: 0).frame(height: 10)
+            panelComposer
+        }
+        .padding(.top, 24)
+        .padding(.horizontal, 24)
+        .padding(.bottom, 15)
+        .frame(width: WashView.columnWidth)
+        .background { WashView().allowsHitTesting(false) }
+        // Right edge 20 pt in from the screen edge — half the drawn 40 pt gap
+        // to the composer — with the canvas's right edge already at the screen
+        // edge when docked (`OverlayPanel.position`).
+        .padding(.trailing, 20)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+        .overlay {
+            if isDropTargeted { dropAffordance }
+        }
+        .onDrop(of: [.image, .fileURL, .png, .tiff], isTargeted: $isDropTargeted, perform: handleDrop)
+    }
+
+    /// The composer inside the field: text row with the chat capsule beside it
+    /// (Anthony's placement — the drawing omits the switcher), controls row
+    /// under it, `+` leading and send trailing, all inside one glass rect.
+    /// Chips wrap above the text, nearest convention to the bare bar's stack.
+    private var panelComposer: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if !store.draft.attachments.isEmpty {
+                chips
+            }
+            HStack(alignment: .top, spacing: 8) {
+                field
+                chatControl
+            }
+            HStack(spacing: Self.gap) {
+                addContext
+                Spacer(minLength: 0)
+                sendButton
+            }
+        }
+        .padding(12)
+        .glassEffect(Token.Material.overlay, in: Token.shape(radius: Self.radius))
+        .shadow(color: Color.black.opacity(0.10), radius: 6, x: 0, y: 4)
+        .shadow(color: Color.black.opacity(0.08), radius: 16, x: 0, y: 10)
+        .shadow(color: Color.black.opacity(0.05), radius: 32, x: 0, y: 18)
     }
 
     @ViewBuilder
@@ -223,9 +292,10 @@ struct OverlayView: View {
         ZStack(alignment: .topLeading) {
             // Placeholder only, no label (§5.8). Drawn rather than asked for:
             // `NSTextView` has no placeholder, and the alternative is the private
-            // `placeholderString` key.
+            // `placeholderString` key. The drawing names the docked field's
+            // placeholder "Ask a follow-up"; the bare bar keeps "Message".
             if store.draft.text.isEmpty {
-                Text("Message")
+                Text(isDocked ? "Ask a follow-up" : "Message")
                     .font(.title3)
                     .foregroundStyle(Color(nsColor: .placeholderTextColor))
                     .frame(height: Self.lineHeight)
@@ -293,21 +363,20 @@ struct OverlayView: View {
         }
     }
 
-    /// §14.3 rejects a *saturated* send button, not a send button. 7 % ink behind
-    /// a 60 % ink glyph is the design's answer: present, and third in weight after
-    /// the caret and the chat control.
-    ///
-    /// Rejected system value: `.quaternary`, the nearest hierarchical fill, which
-    /// is about 0.25 and at 26 pt reads as a filled button.
+    /// §14.3 rejects a *saturated* send button, not a send button, and no
+    /// accent colour yet (Anthony, 2026-09-01: "keep the ruling but change the
+    /// percentage — the circle is too subtle"). 12 % ink behind an 80 % ink
+    /// glyph is one step up from gap 3's 7 %/60 %; a ChatGPT-style lighter
+    /// outer circle is the named next step, still without colour.
     private var sendButton: some View {
         Button(action: send) {
             Image(systemName: "arrow.up")
                 // `.callout` is 12 pt — the HUD's own precedent for reaching a
                 // size through a named style (`DECISIONS.md`, 2026-08-18).
                 .font(.callout.weight(.medium))
-                .foregroundStyle(.primary.opacity(0.6))
+                .foregroundStyle(.primary.opacity(0.8))
                 .frame(width: Self.control, height: Self.control)
-                .background(.primary.opacity(0.07), in: .circle)
+                .background(.primary.opacity(0.12), in: .circle)
         }
         .buttonStyle(.plain)
         .disabled(store.draft.isEmpty)
@@ -442,6 +511,7 @@ struct OverlayView: View {
             _ = try store.send(modelID: modelID)
             expanded = false
             recents = store.recentChats(limit: 8)
+            conversationReload += 1
         } catch {
             // Validation only (empty) — already guarded. Loud in chat, not HUD (§14.3).
         }
@@ -450,8 +520,9 @@ struct OverlayView: View {
 
 /// A wrapping row. There is no system layout for this — `HStack` does not wrap,
 /// `Grid` is fixed-column, and `ViewThatFits` picks one child rather than
-/// flowing them — so it is written once here, for the one consumer that needs it.
-private struct WrapLayout: Layout {
+/// flowing them — so it is written once here, for the consumers that need it
+/// (chips in both composers, image chips in the conversation body).
+struct WrapLayout: Layout {
     let spacing: CGFloat
     let lineSpacing: CGFloat
 
