@@ -161,21 +161,24 @@ final class OverlayPanel {
         previousApp = nil
         panel?.orderOut(nil)
         Activity.shared.set(.overlay, false)
-        // Always hand focus back. The previous slot is now strong (was weak and
-        // nil-ing before the handoff ran), so the app that was frontmost before
-        // `show()` is reliably still there. `orderOut` first so the activation
-        // does not fight `makeKeyAndOrderFront`. Try the cooperative
-        // `activate(from:)` first (denied without it on macOS 14), fall back to
-        // `activate(options:)`.
-        guard let app = previous, app.bundleIdentifier != Bundle.main.bundleIdentifier else {
-            // No previous or previous was Sotto — just resign.
-            if NSApp.isActive { NSApp.deactivate() }
-            return
-        }
-        DispatchQueue.main.async {
+        // Put the user back where they were — but only if they are still here.
+        // If they clicked into something else while the overlay was up, that is
+        // now their focus, and yanking it back would be the theft this surface
+        // exists to avoid (Anthony's conflict ruling: finish-slice-9-overlay's
+        // hide wins). The reference is still held strongly — the weak slot was
+        // observed nil-ing before the handoff ran. `activate(from:)` rather than
+        // the bare `activate()` for the mirror of the reason `show()` needs
+        // `ignoringOtherApps:` — Sotto is the active app here, so this is the
+        // one call allowed to give focus away; without it activation falls to
+        // the Finder (measured 2026-08-27).
+        guard NSApp.isActive else { return }
+        if let app = previous, app.bundleIdentifier != Bundle.main.bundleIdentifier {
             if !app.activate(from: .current) {
-                _ = app.activate(options: [.activateAllWindows, .activateIgnoringOtherApps])
+                _ = app.activate(options: [.activateIgnoringOtherApps])
             }
+        } else {
+            // No previous, or previous was Sotto — just resign.
+            NSApp.deactivate()
         }
     }
 
