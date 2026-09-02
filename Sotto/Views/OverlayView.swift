@@ -357,32 +357,24 @@ struct OverlayView: View {
         }
     }
 
-    /// The ChatGPT-bar treatment (Anthony, 2026-09-01, reference screenshot):
-    /// the circle contrasts with its surroundings so it pops without colour —
-    /// near-solid primary in light mode, a lighter wash of it in dark, the
-    /// glyph inverting to match. **No empty-state dim**: the flip from dimmed
-    /// to full on the first keystroke read as the whole bar darkening (the
-    /// "two layers" report) — the circle's look is now constant, and the
-    /// disabled state still blocks the send.
-    @Environment(\.colorScheme) private var colorScheme
-
-    private var sendFill: Color {
-        colorScheme == .dark ? Color.primary.opacity(0.25) : Color.primary.opacity(0.85)
-    }
-
-    private var sendGlyph: Color {
-        colorScheme == .dark ? Color.primary.opacity(0.95) : Color(nsColor: .textBackgroundColor)
-    }
-
+    /// §14.3 rejects a *saturated* send button, not a send button, and no
+    /// accent colour yet (Anthony, 2026-09-01: "keep the ruling but change the
+    /// percentage — the circle is too subtle"). 12 % ink behind an 80 % ink
+    /// glyph is one step up from gap 3's 7 %/60 %; a ChatGPT-style lighter
+    /// outer circle is the named next step, still without colour. The ChatGPT
+    /// circle shipped and was reverted the same day (Anthony: "revert your
+    /// changes with the bar") — it was built on a misreading of the
+    /// blurrier-on-typing report, and the focus-loss regression that came with
+    /// it needs diagnosing first.
     private var sendButton: some View {
         Button(action: send) {
             Image(systemName: "arrow.up")
                 // `.callout` is 12 pt — the HUD's own precedent for reaching a
                 // size through a named style (`DECISIONS.md`, 2026-08-18).
                 .font(.callout.weight(.medium))
-                .foregroundStyle(sendGlyph)
+                .foregroundStyle(.primary.opacity(0.8))
                 .frame(width: Self.control, height: Self.control)
-                .background(sendFill, in: .circle)
+                .background(.primary.opacity(0.12), in: .circle)
         }
         .buttonStyle(.plain)
         .disabled(store.draft.isEmpty)
