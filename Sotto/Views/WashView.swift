@@ -16,22 +16,28 @@ import SwiftUI
 /// conversation and composer above it; the parent lays it out, this view only
 /// draws.
 ///
-/// **One blur, one tint, one gradient mask — no stacked passes.** The drawing
-/// specifies six blur passes (2/5/10/18/30/46 pt) each inset further and
-/// soft-masked 90–118 pt, so blur accumulates from the outside in. Public AppKit
-/// cannot vary a behind-window blur's radius spatially, and Anthony ruled
-/// against layered passes anyway (2026-09-01): the same plateau is drawn as a
-/// single strong material whose mask fades in over `feather` on all four sides
-/// — alpha(x, y) = fx(x)·fy(y), smoothstep to full at the inset — plus one tint
-/// layer under the same mask. The ramp reads as continuously increasing blur;
-/// it is judged on screen like wash candidate (a) was.
+/// **Uniform interior, one narrow gradient band on all four sides** (Anthony,
+/// 2026-09-01): the treatment where the text sits is the same throughout — the
+/// increase-toward-the-centre plateau read as a visible edge and he did not
+/// like it — and the fade to nothing is confined to a band as wide as the
+/// field's own edge margin (~20 pt), the same on every side: "let's say it's
+/// 20 pixels from the bottom to the chat bar, then there's 20 point padding,
+/// all around the panel of gradient until the background, which is all
+/// uniform."
 ///
-/// Tint peaks carry less of the load now that the mask feather is wide: light
-/// 42 % white, dark 34 % #0A0A0C (the PDF's numbers, appearance-adaptive).
+/// **One blur, one tint, one gradient mask — no stacked passes.** The drawing
+/// specifies six blur passes (2/5/10/18/30/46 pt) each inset further; public
+/// AppKit cannot vary a behind-window blur's radius spatially, and Anthony
+/// ruled against layered passes anyway: the field is a single strong material
+/// whose mask falls to nothing across `feather` on all four sides —
+/// alpha(x, y) = fx(x)·fy(y), smoothstep — plus one tint layer under the same
+/// mask (light 42 % white, dark 34 % #0A0A0C, appearance-adaptive).
 struct WashView: NSViewRepresentable {
     static let columnWidth: CGFloat = 500
-    /// 90–118 pt drawn range; one value carries the single-gradient version.
-    static let feather: CGFloat = 110
+    /// The gradient band's width on each side — the field's own edge margin,
+    /// per the 2026-09-01 uniform-interior ruling. Was the drawing's 90–118 pt
+    /// plateau feather, which put the ramp across a third of the field.
+    static let feather: CGFloat = 20
 
     func makeNSView(context: Context) -> FieldView {
         let view = FieldView()
