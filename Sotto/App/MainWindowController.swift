@@ -41,7 +41,12 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         )
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
-        window.title = "Sotto"
+        // **Empty, not "Sotto".** With a toolbar present, SwiftUI's bridging
+        // re-showed the window title next to the `.navigation` toolbar item,
+        // producing "Models  Sotto" in the title bar (2026-09-03). The title is
+        // never shown (`titleVisibility = .hidden`) and Sotto is `.accessory`,
+        // so no Window menu or Mission Control label needs it.
+        window.title = ""
         window.isReleasedWhenClosed = false
         window.setFrameAutosaveName("SottoMainWindow")
 

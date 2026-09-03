@@ -177,7 +177,7 @@ Adaptive backdrop tint, specular edge, and rim refraction — none come from blu
 - `.primary` and the other semantic label colors resolve against the *glass*, not the window, so they stay legible with no branch of your own.
 - **An explicit `.environment(\.colorScheme, _)` overrides that and pins the content**, while the surface goes on tinting and refracting from the backdrop — verified 2026-08-19 against a backdrop × override matrix. **Sotto's HUD pins deliberately** (`HUDPanel`, `DECISIONS.md` 2026-08-19): left adaptive, the labels invert mid-dictation when the user scrolls something dark under a HUD that is already on screen. Pin at appearance, never re-pin during one showing. Anywhere else, do not add the branch.
 - **The flip is a renderer effect and is invisible to every in-process API — measured 2026-09-02, and this is the trap.** With the system pinned Dark over a white backdrop, text inside a `.glassEffect()` *rendered black on light glass* while `@Environment(\.colorScheme)` reported `dark`, `NSView.effectiveAppearance` reported `NSAppearanceNameDarkAqua`, and no `onChange(of: colorScheme)` ever fired; over a black backdrop the same view rendered white on dark with identical readings. An earlier run that appeared to show `effectiveAppearance` tracking the backdrop did not reproduce — 1 of 3 white runs and 1 of 1 black runs returned `Aqua`, which is noise, not signal. **So the app cannot ask what polarity the glass chose.** Anything that must match a glass surface's polarity either *is* glass, or needs a real backdrop sample and therefore the Screen Recording grant (§4.3's last bullet, and it is a consent-rule decision under `CLAUDE.md` §2, not a rendering one).
-- It is why the Appearance tab stays cut (§12). There is no per-appearance asset for a settings control to pick.
+- It is why a light/dark or Clear/Tinted control stays cut from the Appearance tab (§12). There is no per-appearance asset for a settings control to pick. (The tab itself came back 2026-09-03 for one unrelated control — the docked-overlay panel surface — `DECISIONS.md`.)
 
 **Clear and Tinted are not system appearances.** There is no `NSAppearanceName` for either; `Glass` has `.regular`/`.clear` and `NSGlassEffectView` has the matching two-case `style`, both app-set, and `tint` is a `Color` the app supplies. The Default/Dark/Clear/Tinted quartet is the **icon and widget** appearance set, which the system generates from the Icon Composer document (§6.9) and which does not extend to in-app surfaces. A global `NSGlassDiffusionSetting` default does exist; a per-process override of it produced zero pixel change, which does not prove it is inert — the argument domain may simply not be where it is read. Do not build on it either way.
 
@@ -324,7 +324,8 @@ It is an undated, unlocked sketch, not to scale: its 378 × 70/radius 22 compose
 |---|---|
 | `state.recording` / `state.latched` | Hand state communicates mode; waveform confirms capture |
 | `state.error` / `state.network` | Deleted with tier 3; errors route per §10 |
-| Theme struct / Appearance tab | Inherit System Settings wholesale |
+| Theme struct | Inherit System Settings wholesale; no runtime role switching |
+| Appearance tab | **Partially reversed 2026-09-03** (`DECISIONS.md`): the tab exists, but holds one control — which surface is drawn behind the docked overlay (`AppearanceSettings.ChatPanelStyle`). Still no theme struct, no light/dark override, no tint control; appearance is still inherited wholesale |
 | MCP network badge | Opt-in/off-by-default is sufficient; marker is decoration |
 | Compose-bar model selector | Menu bar owns model choice |
 | HUD waveform toggle | Waveform is mandatory |

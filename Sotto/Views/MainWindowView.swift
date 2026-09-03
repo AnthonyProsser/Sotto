@@ -48,9 +48,12 @@ enum Mode: CaseIterable, Identifiable {
 /// The settings sections, taken from spec §8 rather than invented: §8.4 puts
 /// updates "in General", §8.1 owns everything dictation does, §8.2 owns per-model
 /// chat settings, and §6 puts the MCP list in settings because enabling a server
-/// is a deliberate act taken there. **§8.5 is why there is no Appearance section**
-/// — no mode picker, no theme picker, no tint toggle, all delegated to System
-/// Settings.
+/// is a deliberate act taken there.
+///
+/// **Appearance reverses spec §8.5's "Appearance — none"** (and the matching
+/// cuts in `CLAUDE.md` §3 and `rules/design.md` §12) on Anthony's call,
+/// 2026-09-03 — see `DECISIONS.md`. It carries one control: which surface is
+/// drawn behind the docked overlay. No light/dark override, no theme.
 ///
 /// **Dictation and Chat are the two scopes §8 opens with**, named for what the
 /// user is doing rather than for the mechanism. Profiles are the whole of the
@@ -59,13 +62,14 @@ enum Mode: CaseIterable, Identifiable {
 /// only shape (§8.2), which is exactly why one section cannot serve both
 /// (`DECISIONS.md`, 2026-08-15).
 enum SettingsSection: CaseIterable, Identifiable {
-    case general, dictation, chat, models, mcp
+    case general, appearance, dictation, chat, models, mcp
 
     var id: Self { self }
 
     var title: String {
         switch self {
         case .general: "General"
+        case .appearance: "Appearance"
         case .dictation: "Dictation"
         case .chat: "Chat"
         case .models: "Models"
@@ -76,6 +80,7 @@ enum SettingsSection: CaseIterable, Identifiable {
     var symbol: String {
         switch self {
         case .general: "gearshape"
+        case .appearance: "paintpalette"
         case .dictation: "mic"
         case .chat: "bubble.left.and.bubble.right"
         case .models: "cube"
@@ -281,9 +286,12 @@ struct MainWindowView: View {
     @ViewBuilder
     private var detail: some View {
         if state.showingSettings {
-            if state.settingsSection == .models {
+            switch state.settingsSection {
+            case .models:
                 ModelsPane()
-            } else {
+            case .appearance:
+                AppearancePane()
+            default:
                 ContentUnavailableView(
                     state.settingsSection.title,
                     systemImage: state.settingsSection.symbol
