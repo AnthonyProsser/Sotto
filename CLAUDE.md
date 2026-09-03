@@ -166,6 +166,12 @@ This is here rather than in `rules/design.md` because the case that produced it 
 
 ---
 
+## 0.8 Keep Sotto running for review
+
+**After running tests or rebuilding, never quit Sotto.** Anthony needs the app left up to view changes — quitting closes the surface he is about to inspect. Leave the process running (`.accessory` stays in menu bar, overlay/HUD remain summonable). If a restart is required, relaunch immediately and leave it up. Added 2026-08-29 per standing instruction. Applies to `xcodebuild test`/`build` and manual runs; `pkill Sotto` is only for a relaunch sequence, never a final state.
+
+---
+
 ## 1. Where the project is — not stated here, on purpose
 
 **Slice 1 is in progress. For anything more specific than that, read `DECISIONS.md` newest-first and `git log`.** Between them they carry what has actually been settled and built; this file carried a summary of it for one day and was wrong about three things by the second — it claimed no feature Swift existed after `Sotto/Design/Token.swift` was committed, and it listed an open issue that a decision had already closed.

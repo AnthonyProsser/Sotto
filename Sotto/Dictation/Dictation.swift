@@ -248,10 +248,23 @@ final class Dictation {
         Task { await Transcription.shared.cancel() }
     }
 
-    /// §4.9 first, then §3's ladder.
+    /// §4.9 first, then §5.4 overlay dictation, then §3's ladder.
     private func deliver(_ draft: Transcription.Draft) {
         guard !draft.text.isEmpty else {
             log.notice("Nothing transcribed.")
+            finish(with: nil)
+            return
+        }
+
+        // **Overlay dictation fills the bar with an ordinary message (§5.4).**
+        // Not automatically about an attached block — just as typed input would be.
+        if Activity.shared.active.contains(.overlay) {
+            var bar = DraftStore.shared.draft.text
+            if !bar.isEmpty && !bar.hasSuffix(" ") && !bar.hasSuffix("\n") { bar += " " }
+            bar += draft.text
+            DraftStore.shared.draft.text = bar
+            // Leave selection attachment path alone — that comes via the + menu / auto-capture, not via this.
+            log.notice("Routed dictation to overlay bar: \(draft.words.count, privacy: .public) words.")
             finish(with: nil)
             return
         }
@@ -262,8 +275,17 @@ final class Dictation {
         // slice 9 fills a hole rather than adding one. Selected text is never a
         // dictation target; to replace text, delete it first.
         if let selection, !selection.isEmpty {
+            // Attach selection as chip + transcript as ordinary message in draft.
+            let app = NSWorkspace.shared.frontmostApplication?.localizedName ?? "Unknown"
+            DraftStore.shared.addSelection(app: app, text: selection)
+            var bar = DraftStore.shared.draft.text
+            if !bar.isEmpty && !bar.hasSuffix(" ") && !bar.hasSuffix("\n") { bar += " " }
+            bar += draft.text
+            DraftStore.shared.draft.text = bar
+            // Ensure overlay shows so user sees where it went.
+            OverlayPanel.shared.show()
             log.notice("""
-                Routed to chat (slice 9): \(draft.words.count, privacy: .public) words \
+                Routed to chat draft (slice 9): \(draft.words.count, privacy: .public) words \
                 against a \(selection.count, privacy: .public)-character selection.
                 """)
             finish(with: nil)

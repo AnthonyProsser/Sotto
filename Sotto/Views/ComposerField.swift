@@ -39,20 +39,40 @@ struct ComposerField: NSViewRepresentable {
     /// The field's laid-out height, reported upward so the composer can size
     /// itself. One line when empty.
     @Binding var height: CGFloat
+    /// True once the draft needs a second line **at the field's current
+    /// width** — the inline→stacked trigger (`OverlayView`, `DECISIONS.md`
+    /// 2026-09-01: text types on the control row and moves to the top row only
+    /// when the line fills). A height test cannot do this job: the raw natural
+    /// line box (26⅓ pt) is taller than the drawn row regardless of where the
+    /// draft wraps, so "more than one line tall" carries no width information.
+    /// Width, not height, is what "the line fills" means, and the field lays
+    /// out at whichever width the current composer state gives it.
+    @Binding var overflow: Bool
     let onSend: () -> Void
+    /// Cmd+V image paste → chip. Stay nil for call sites that don't need it.
+    var onImagePaste: ((Data, String) -> Void)? = nil
 
     /// 15/24 from the design's caption. The size is `.title3`'s, read from the
-    /// system rather than typed; only the leading is authored, because there is no
-    /// system API that sets a line height independently of a text style and the
-    /// drawn composer is measured on 24 pt rows.
-    private static let lineHeight: CGFloat = 24
+    /// system rather than typed. **The 24-pt row is not the font's line box** —
+    /// the style's natural box is `ascender − descender + leading` ≈ 26⅓, and
+    /// TextKit 2 ignores `maximumLineHeight`, so a min/max pair does nothing.
+    /// `paragraphStyle` closes the gap with `lineHeightMultiple` instead, which
+    /// TextKit 2 does honor (measured 2026-09-01) — the caret then spans the
+    /// same 24-pt row the glyphs and the frames assume, instead of a taller box
+    /// that clipped and sat the text off-centre against it.
+    static let lineHeight: CGFloat = 24
 
     static var font: NSFont { .preferredFont(forTextStyle: .title3) }
 
     static var paragraphStyle: NSParagraphStyle {
         let style = NSMutableParagraphStyle()
-        style.minimumLineHeight = lineHeight
-        style.maximumLineHeight = lineHeight
+        let font = Self.font
+        // Drawn row over natural box — derived, not authored. When the system
+        // font changes, the multiple follows it and the row stays 24. The
+        // min/max pair is left unset on purpose: `maximumLineHeight` is
+        // ignored by TextKit 2, and setting `minimumLineHeight` alongside the
+        // multiple broke the scaling it was there to guarantee.
+        style.lineHeightMultiple = Self.lineHeight / (font.ascender - font.descender + font.leading)
         return style
     }
 
@@ -75,6 +95,12 @@ struct ComposerField: NSViewRepresentable {
 
         field.delegate = context.coordinator
         field.onSend = onSend
+        field.onImagePaste = onImagePaste
+        let coordinator = context.coordinator
+        field.onSizeChange = { [weak field] in
+            guard let field else { return }
+            coordinator.report(field)
+        }
         field.font = Self.font
         field.defaultParagraphStyle = Self.paragraphStyle
         field.typingAttributes = [
@@ -113,6 +139,7 @@ struct ComposerField: NSViewRepresentable {
     func updateNSView(_ scroll: NSScrollView, context: Context) {
         guard let field = scroll.documentView as? TextView else { return }
         field.onSend = onSend
+        field.onImagePaste = onImagePaste
         if field.string != text { field.string = text }
         context.coordinator.report(field)
         context.coordinator.keepFocus(field)
@@ -172,18 +199,27 @@ struct ComposerField: NSViewRepresentable {
         /// hard breaks is one fragment, so taking the first fragment's height as
         /// the line height made the cap `8 lines x 6` and the field grew until the
         /// canvas ran out. The line is one step further in: the fragment's own
-        /// `textLineFragments`, whose `typographicBounds` is the laid-out line box
-        /// the drawn 24 pt only approximates.
+        /// `textLineFragments`, whose `typographicBounds` is the laid-out line box.
         ///
         /// An empty document has no fragments at all, which is why the floor is
         /// one line rather than zero.
+        ///
+        /// **A report at an un-laid-out width is worse than no report.** During
+        /// the first layout pass — and the rebuild the inline→stacked switch
+        /// triggers — the text view's width is still zero, and a zero-width
+        /// container lays one unbounded line: the report would announce "one
+        /// line" over a nine-line draft and collapse the height a previous,
+        /// correct pass had set (the clipped-draft bug, 2026-09-01). Skip and
+        /// wait for `setFrameSize` to re-run this at the real width.
         func report(_ textView: TextView) {
-            guard let layout = textView.textLayoutManager else { return }
+            guard textView.frame.width >= 1, let layout = textView.textLayoutManager else { return }
             layout.ensureLayout(for: layout.documentRange)
             var used: CGFloat = 0
             var line: CGFloat = 0
+            var lines = 0
             layout.enumerateTextLayoutFragments(from: nil, options: [.ensuresLayout]) { fragment in
                 used = max(used, fragment.layoutFragmentFrame.maxY)
+                lines += fragment.textLineFragments.count
                 if line == 0, let first = fragment.textLineFragments.first {
                     line = first.typographicBounds.height
                 }
@@ -195,12 +231,36 @@ struct ComposerField: NSViewRepresentable {
             if abs(parent.height - clamped) > 0.5 {
                 DispatchQueue.main.async { self.parent.height = clamped }
             }
+            // Stacked is wider than inline, so a draft that overflowed inline
+            // can lay one line here again; the consumer only acts on `true`,
+            // which is what keeps this from oscillating with the width change.
+            if (lines > 1) != parent.overflow {
+                DispatchQueue.main.async { self.parent.overflow = lines > 1 }
+            }
         }
     }
 
-    /// Return, Shift-Return, and Escape — the whole keyboard rule.
+    /// Return, Shift-Return, Escape, and Cmd+V image paste — the whole keyboard rule.
     final class TextView: NSTextView {
         var onSend: () -> Void = {}
+        var onImagePaste: ((Data, String) -> Void)? = nil
+        /// Re-measure when the view's size changes. The width arrives *after*
+        /// the first `updateNSView` (and again on the inline→stacked rebuild),
+        /// and nothing else re-runs `report` for it — SwiftUI updates only on
+        /// its own state, not on AppKit layout. Without this, a wide draft is
+        /// measured once at the transient width and stays clipped forever.
+        var onSizeChange: (() -> Void)? = nil
+
+        override func setFrameSize(_ newSize: NSSize) {
+            let widthChanged = abs(newSize.width - frame.width) > 0.5
+            super.setFrameSize(newSize)
+            if widthChanged {
+                DispatchQueue.main.async { [weak self] in
+                    guard let self else { return }
+                    self.onSizeChange?()
+                }
+            }
+        }
 
         override func insertNewline(_ sender: Any?) {
             // **Shift is read from the event, not from a second selector.**
@@ -238,6 +298,46 @@ struct ComposerField: NSViewRepresentable {
         /// its turn.
         override func cancelOperation(_ sender: Any?) {
             nextResponder?.tryToPerform(#selector(cancelOperation(_:)), with: sender)
+        }
+
+        /// **Cmd+V image paste (§5.5).** Images become draft attachments (chips), not
+        /// inserted text. Text paste falls through to AppKit.
+        override func paste(_ sender: Any?) {
+            if handleImagePaste() { return }
+            super.paste(sender)
+        }
+
+        override func pasteAsPlainText(_ sender: Any?) {
+            if handleImagePaste() { return }
+            super.pasteAsPlainText(sender)
+        }
+
+        private func handleImagePaste() -> Bool {
+            let pb = NSPasteboard.general
+            // Direct image data (screenshot Cmd+Ctrl+Shift+4, browser copy).
+            if let tiff = pb.data(forType: .tiff), let img = NSImage(data: tiff), let rep = img.tiffRepresentation {
+                // Prefer PNG if available.
+                if let png = pb.data(forType: .png) {
+                    onImagePaste?(png, "pasted-\(UUID().uuidString.prefix(4)).png"); return true
+                }
+                onImagePaste?(rep, "pasted-\(UUID().uuidString.prefix(4)).png"); return true
+            }
+            if let png = pb.data(forType: .png) {
+                onImagePaste?(png, "pasted-\(UUID().uuidString.prefix(4)).png"); return true
+            }
+            // File URLs (Finder copy).
+            if let items = pb.pasteboardItems {
+                for item in items {
+                    if let str = item.string(forType: .fileURL), let url = URL(string: str) {
+                        let ext = url.pathExtension.lowercased()
+                        if ["png","jpg","jpeg","webp","heic","gif","tiff","bmp"].contains(ext),
+                           let data = try? Data(contentsOf: url) {
+                            onImagePaste?(data, url.lastPathComponent); return true
+                        }
+                    }
+                }
+            }
+            return false
         }
     }
 }
