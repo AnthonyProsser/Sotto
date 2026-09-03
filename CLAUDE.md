@@ -209,7 +209,7 @@ Each of these was in the spec and was cut. **A model trained on older context wi
 | Cut | Reason lives in |
 |---|---|
 | Live transcript layer in the HUD · live-streaming insertion · sentence-following playback highlight · Binoculars AI-detection | `rules/audio-and-transcription.md` §4 |
-| `state.recording` / `state.latched` · `state.error` / `state.network` and the whole `state.*` namespace · tier 3 · the theme struct and the Appearance tab · network badge on MCP features · model selector in the compose bar · HUD waveform on/off | `rules/design.md` §12 |
+| `state.recording` / `state.latched` · `state.error` / `state.network` and the whole `state.*` namespace · tier 3 · the theme struct · network badge on MCP features · model selector in the compose bar · HUD waveform on/off — **and the Appearance tab, but that one came back 2026-09-03 for a single control (the docked-overlay panel surface); no theme, no light/dark, `DECISIONS.md`** | `rules/design.md` §12 |
 | CGEvent Unicode insertion strategy | `rules/input-and-insertion.md` §2 |
 | Three bundled search MCPs (SearXNG, DuckDuckGo, BYO-key) | `rules/models-and-network.md` §3 |
 

@@ -118,6 +118,10 @@ struct OverlayView: View {
     private static let sideInset: CGFloat = (WashView.columnWidth + 20 - 452) / 2
 
     @State private var store = DraftStore.shared
+    /// The docked panel's background surface is a user choice (Settings →
+    /// Appearance). The default is now a feathered Liquid Glass panel; the wash
+    /// is one option among three (`DECISIONS.md`, 2026-09-03).
+    @State private var appearance = AppearanceSettings.shared
     @State private var fieldHeight: CGFloat = OverlayView.lineHeight
     /// The draft needs a second line at the inline width (`ComposerField`).
     /// This, not the field's height, is what expands the bar.
@@ -259,12 +263,28 @@ struct OverlayView: View {
         .padding(.horizontal, Self.sideInset)
         .padding(.bottom, 15 + OverlayPanel.bottomSlack)
         .frame(width: WashView.columnWidth + 20)
-        .background { WashView().allowsHitTesting(false) }
+        .background { panelSurface.allowsHitTesting(false) }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
         .overlay {
             if isDropTargeted { dropAffordance }
         }
         .onDrop(of: [.image, .fileURL, .png, .tiff], isTargeted: $isDropTargeted, perform: handleDrop)
+    }
+
+    /// The docked panel's background (Settings → Appearance). `washBlur` is
+    /// `WashView` unchanged; the two Liquid Glass options are `GlassPanelView`,
+    /// reversing gap 1 — with `liquidBlur` now the default (`DECISIONS.md`,
+    /// 2026-09-03).
+    @ViewBuilder
+    private var panelSurface: some View {
+        switch appearance.chatPanelStyle {
+        case .liquidBlur:
+            GlassPanelView(border: .feathered)
+        case .liquidGlass:
+            GlassPanelView(border: .crisp)
+        case .washBlur:
+            WashView()
+        }
     }
 
     /// What the conversation must leave room for below itself: the spacer, the
