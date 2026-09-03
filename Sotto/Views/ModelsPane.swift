@@ -334,11 +334,8 @@ struct ModelsPane: View {
             .padding()
         }
         .task { models.reload() }
+        .settingsToolbar("Models")
         .toolbar {
-            ToolbarItem(placement: .navigation) {
-                Text("Models")
-                    .font(.title2.weight(.semibold))
-            }
             ToolbarItem(placement: .principal) {
                 searchField
             }
@@ -357,6 +354,11 @@ struct ModelsPane: View {
     /// rows only, never a networked model search. In the title bar so the
     /// detail's scroll content starts at the toolbar's bottom edge with no
     /// empty titlebar band above it.
+    /// **Height-clamped and capsule-clipped.** The field was tall enough to
+    /// straddle the titlebar/content boundary, and the hairline the system draws
+    /// there showed through the translucent `.quaternary` fill as a stripe
+    /// across the middle (2026-09-03). A fixed 24 pt keeps it centred in the
+    /// toolbar band, clear of the seam.
     private var searchField: some View {
         HStack(spacing: 6) {
             Image(systemName: "magnifyingglass")
@@ -373,10 +375,10 @@ struct ModelsPane: View {
                 .buttonStyle(.plain)
             }
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 5)
-        .background(.quaternary, in: .rect(cornerRadius: 8, style: .continuous))
-        .frame(width: 240)
+        .padding(.horizontal, 9)
+        .frame(width: 240, height: 24)
+        .background(.quaternary, in: .capsule)
+        .clipShape(.capsule)
     }
 
     // MARK: Sections

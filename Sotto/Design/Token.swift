@@ -14,7 +14,9 @@ import SwiftUI
 ///
 /// **A thin mapping, not a runtime system.** There is no theme struct — v0.13
 /// required one, v0.14 cut it, and appearance is inherited wholesale from System
-/// Settings. Nothing here is stored, observed, or switched at runtime.
+/// Settings. Nothing here is stored, observed, or switched at runtime. (Settings
+/// → Appearance, `DECISIONS.md` 2026-09-03, picks the docked-overlay panel
+/// surface and nothing else — it touches no role below.)
 ///
 /// **Two tiers, no third.** Every role tries tier 1 first:
 ///
