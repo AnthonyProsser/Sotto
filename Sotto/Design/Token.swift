@@ -282,7 +282,10 @@ extension Token.Authored {
     /// follows the appearance `HUDPanel` pins; the overlay's follows the system
     /// appearance. Keying it off real backdrop luminance needs the screen sample
     /// that has been open since 2026-08-19, and a hairline does not justify a
-    /// Screen Recording prompt.
+    /// Screen Recording prompt. **Reading the glass's own conclusion instead is
+    /// not an option, and that is now measured rather than assumed** — the flip
+    /// happens in the render server and neither `colorScheme` nor
+    /// `effectiveAppearance` reports it (2026-09-02, `rules/design.md` §6.7).
     enum Specular {
         /// Hairline. `strokeBorder` insets by half of this and draws inward, so
         /// the rim sits on the glass instead of straddling its edge.

@@ -13,8 +13,10 @@ import SwiftUI
 /// The conversation body of the docked panel: past turns parsed back out of
 /// the chat's `chat.md`, rendered in the drawn anatomy — quoted source line on
 /// a 2 pt accent rule, question, `SOTTO` label, semibold answer. The field's
-/// top edge hugs this content (24 pt above the first line, parent padding) up
-/// to the 70 % ceiling; past it, this is the sole scroll region (§5.8).
+/// top edge sits `OverlayView.topInset` above the first line (the tint ramp
+/// completes just above the text) up to the 70 % ceiling; past it, this is the
+/// sole scroll region (§5.8). Scrolled-away turns dissolve through a fade at
+/// the viewport's top edge instead of clipping hard against it.
 struct ConversationView: View {
     let slug: String
     /// 70 % ceiling minus the composer's own height — the most this body may
@@ -22,6 +24,10 @@ struct ConversationView: View {
     let maxHeight: CGFloat
     /// Bumped by the parent after a send, so the turn just committed appears.
     var reload: Int = 0
+
+    /// The height of the top fade — how much viewport the dissolve takes,
+    /// about two `.body` line boxes. One edit to change.
+    private static let fadeHeight: CGFloat = 30
 
     /// One rendered turn. `sources` and `images` come back out of the draft
     /// serialization — fenced `selection` blocks and attachment markdown.
@@ -43,6 +49,8 @@ struct ConversationView: View {
     /// The measured height of the body, so the scroll region hugs short
     /// conversations instead of pinning the field at its ceiling.
     @State private var contentHeight: CGFloat = 0
+    /// Distance scrolled from the content top — drives the top fade.
+    @State private var scrollOffset: CGFloat = 0
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -57,10 +65,38 @@ struct ConversationView: View {
                 .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { contentHeight = $0 }
             }
             .frame(height: min(contentHeight + 1, maxHeight))
+            .mask { topFade }
+            .onScrollGeometryChange(for: CGFloat.self) { geometry in
+                // Insets are zero here, but the sum is the honest offset, and
+                // rubber-banding past the top goes negative — clamp to rest.
+                max(0, geometry.contentOffset.y + geometry.contentInsets.top)
+            } action: { _, offset in
+                scrollOffset = offset
+            }
             .onAppear { load(scroll: false, proxy: proxy) }
             .onChange(of: slug) { _, _ in load(scroll: false, proxy: proxy) }
             .onChange(of: reload) { _, _ in load(scroll: true, proxy: proxy) }
         }
+    }
+
+    /// The top fade: clear at the viewport's top edge, opaque `fadeHeight`
+    /// down. The ramp's height grows in with the first `fadeHeight` points of
+    /// scroll, so a turn scrolling out dissolves continuously instead of
+    /// clipping (Anthony, 2026-09-01) and an unscrolled conversation is
+    /// untouched. The stop location is a fraction of the viewport, which is
+    /// `maxHeight` whenever there is anything to scroll.
+    private var topFade: some View {
+        Rectangle().fill(
+            LinearGradient(
+                stops: [
+                    .init(color: .clear, location: 0),
+                    .init(color: .black,
+                          location: min(scrollOffset, Self.fadeHeight)
+                              / max(min(contentHeight + 1, maxHeight), 1)),
+                ],
+                startPoint: .top, endPoint: .bottom
+            )
+        )
     }
 
     @ViewBuilder

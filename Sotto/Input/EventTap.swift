@@ -40,10 +40,36 @@ final class EventTap {
     /// one action fires" true rather than hoped for.
     private var abortedThisEvent = false
 
-    /// Coordinated with `OverlayPanel.Panel.cancelOperation` to ensure exactly
-    /// one action per Esc press top-down (§10.4). Set synchronously on main
-    /// when 1 or 2 fires on the tap, read by the panel before it tries 3/4.
-    static var escapeHandledOnMain: Bool = false
+    /// Per-Esc handshake with `OverlayPanel.Panel.cancelOperation` (§10.4): every
+    /// Escape the tap sees is marked before the event is delivered — priority 1
+    /// has already spent the press here, and for every other Esc the tap has
+    /// dispatched the 2–4 remainder to main, which runs it alone. The panel only
+    /// stands down. Written on the tap thread, consumed on main; the lock is both
+    /// the visibility edge (main cannot observe the write without it) and the
+    /// race protection a bare Bool would lack.
+    ///
+    /// Not reset between presses on purpose: the tap re-marks on every Esc, so a
+    /// mark left over from a press whose event never reached a key panel is
+    /// indistinguishable from the current one, and harmless for the same reason.
+    private let escStateLock = NSLock()
+    private var escapeHandledForCurrentPress = false
+
+    func markEscapeHandled() {
+        escStateLock.lock()
+        escapeHandledForCurrentPress = true
+        escStateLock.unlock()
+    }
+
+    /// Read-and-clear, for the panel on main. A false here means the press
+    /// bypassed the tap (a re-arm gap, another tap's swallow ahead of this one);
+    /// the panel treats it as nothing to do, keeping exactly-one honest.
+    func consumeEscapeHandled() -> Bool {
+        escStateLock.lock()
+        defer { escStateLock.unlock() }
+        guard escapeHandledForCurrentPress else { return false }
+        escapeHandledForCurrentPress = false
+        return true
+    }
 
     private init() {}
 
@@ -208,33 +234,19 @@ final class EventTap {
             abortedThisEvent = false
             disposition = recognizer.handle(.otherKeyDown(isEscape: isEscape))
             if isEscape {
-                DispatchQueue.main.sync { Self.escapeHandledOnMain = false }
-                // §10.4 top-down, exactly one. Check isIdle synchronously —
-                // no global monitor when idle, and panel is handler when key.
-                var isIdle = true
-                // Activity is @MainActor, read synchronously via main queue.
-                // Tap thread must not block, but Esc is rare and main is not
-                // contended here; sync is cheaper than async + race.
-                if Thread.isMainThread {
-                    isIdle = Activity.shared.isIdle
-                } else {
-                    DispatchQueue.main.sync { isIdle = Activity.shared.isIdle }
-                }
-                if isIdle {
-                    // No monitor — pass through, no action.
-                } else if abortedThisEvent {
-                    // Priority 1 fired on this tap (GestureRecognizer).
-                    DispatchQueue.main.sync { Self.escapeHandledOnMain = true }
-                } else {
-                    // Priority 2 — try on main, synchronously so panel sees result.
-                    var handled2 = false
-                    DispatchQueue.main.sync {
-                        handled2 = Dictation.shared.cancelTranscription()
-                        if handled2 { Self.escapeHandledOnMain = true }
-                    }
-                    // Priorities 3/4 live in OverlayPanel.Panel.cancelOperation
-                    // and will check escapeHandledOnMain before firing.
-                    _ = handled2
+                // §10.4 top-down, exactly one. Priority 1 has already fired
+                // above, on this thread. The rest goes to main **asynchronously**:
+                // this is a `.defaultTap` at the head of the session, so while
+                // this callback runs, every keystroke in the session queues
+                // behind it — a `main.sync` here (as slice 9's first cut had)
+                // parked system-wide input on Sotto's main thread two or three
+                // times per Esc, in every app, idle or not. The mark is what
+                // keeps the ordering the sync used to buy: it is set before this
+                // event is delivered, so the panel stands down either way and
+                // `escRemainderFromTap` is the one runner of 2–4.
+                markEscapeHandled()
+                if !abortedThisEvent {
+                    DispatchQueue.main.async { OverlayPanel.shared.escRemainderFromTap() }
                 }
             }
         case .keyUp:

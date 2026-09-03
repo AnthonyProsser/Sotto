@@ -87,7 +87,13 @@ final class OverlayPanel {
         // Cheapest mitigation: rebuild on wake.
         NotificationCenter.default.addObserver(
             forName: NSWorkspace.didWakeNotification, object: nil, queue: .main
-        ) { [weak self] _ in self?.panel = nil }
+        ) { [weak self] _ in
+            // The observer's queue is .main, so the block is on the main actor.
+            MainActor.assumeIsolated {
+                self?.panel = nil
+                self?.stopPolarityRefresh()
+            }
+        }
     }
 
     // MARK: - Showing
@@ -106,6 +112,11 @@ final class OverlayPanel {
     func reposition() {
         guard let panel, panel.isVisible else { return }
         position(panel)
+        // Retargeting can switch docked↔bare while visible; the polarity pin
+        // follows the same property of the target that `position` just used.
+        // No hiding here — the panel is already on screen, and a blink on
+        // every chat switch would be worse than one tick on the old pin.
+        applyBackdropPolarity(to: panel, hidingUntilSampled: false)
     }
 
     /// Whoever was frontmost when the overlay opened, so `hide()` can hand focus
@@ -163,12 +174,25 @@ final class OverlayPanel {
         // itself between showings (§5.8: the surface is summoned to be typed
         // into).
         Activity.shared.set(.overlay, true)
+        // Docked: hidden until the backdrop sample pins the polarity, so the
+        // first visible frame already carries it — sampling a visible panel
+        // too late would flash the system polarity for a frame or two (the
+        // polarity MARK below).
+        applyBackdropPolarity(to: panel, hidingUntilSampled: true)
     }
 
     func hide() {
+        // Flush the draft before the surface goes away — saves coalesce, and
+        // hide is the boundary where the user expects every keystroke kept.
+        DraftStore.shared.forceSave()
         let previous = previousApp
         previousApp = nil
         panel?.orderOut(nil)
+        // Lift the window-wide polarity pin — the bare state is never governed
+        // by it, and a pin held across showings would freeze what the glass is
+        // free to flip.
+        stopPolarityRefresh()
+        panel?.appearance = nil
         Activity.shared.set(.overlay, false)
         // Put the user back where they were — but only if they are still here.
         // If they clicked into something else while the overlay was up, that is
@@ -191,6 +215,169 @@ final class OverlayPanel {
         }
     }
 
+    /// **§10.4 priorities 2–4**, dispatched here by the tap's Esc handoff
+    /// (`EventTap.handle`). Runs on main. Priority 2 fires wherever the press
+    /// happened — dictation is system-wide, so an Escape in another app still
+    /// cancels an in-flight transcription. 3 and 4 only while Sotto is
+    /// frontmost: an Escape inside another app is that app's, and must not stop
+    /// a chat or close this overlay. When the panel is key its `cancelOperation`
+    /// has already stood down, so this is the one runner either way.
+    func escRemainderFromTap() {
+        if Dictation.shared.cancelTranscription() { return }
+        guard NSApp.isActive else { return }
+        // Scrim preempts all four (§10.4, slice 13).
+        // if Scrim.shared.isPresented { Scrim.shared.dismiss(); return }
+        // Priority 3: stop chat generation before closing.
+        if Activity.shared.active.contains(.generating) {
+            Activity.shared.set(.generating, false)
+            NotificationCenter.default.post(name: .sottoCancelGeneration, object: nil)
+            return
+        }
+        // Priority 4: close overlay — only if it is up. `hide()` hands focus
+        // back to `previousApp`, which must not run for a press that arrived
+        // while the overlay was down.
+        guard panel?.isVisible == true else { return }
+        hide()
+    }
+
+    // MARK: - Backdrop polarity
+
+    /// **The docked panel's light/dark follows the backdrop, not the system
+    /// setting** (Anthony, 2026-09-02, `DECISIONS.md`). The bare bar is glass,
+    /// and the render server flips it from the pixels behind it; the wash is
+    /// not glass, so nothing flipped it — it read `effectiveAppearance` and
+    /// rendered dark over a white document in Dark Mode. The fix gives the
+    /// panel the glass's *input*: `BackdropSample` captures what is behind the
+    /// column, and the window's appearance is pinned to the result, which
+    /// drives the wash's scrim, the conversation's semantic colours, and the
+    /// specular rim from one seam. The glass composer riding on the wash needs
+    /// no branch of its own — it samples the wash's darkened or lightened
+    /// field and flips with it.
+    ///
+    /// **The bare state is never pinned.** The pin is a window-wide property
+    /// and the bare bar deliberately has no light/dark branch (OverlayView
+    /// header) — pinning it would freeze what the glass is free to flip, so
+    /// every path that leaves the docked state unpins.
+    ///
+    /// **The capture is async and the show path hides the panel until its
+    /// first pin lands.** The synchronous one-shot that could have sampled
+    /// before ordering front (`CGWindowListCreateImage`) is obsoleted in the
+    /// installed SDK; ordering front invisible costs the same — the surface
+    /// appears a capture's width later, key and typeable the whole time — and
+    /// the wrong-polarity flash never renders. A capture that stalls reveals
+    /// anyway after 1.5 s. **The Screen Recording grant is requested once, at
+    /// the first docked open** — the same deferred-to-first-use pattern as
+    /// §5.6's screenshot. An ungranted machine gets nil samples and falls back
+    /// to the system appearance, which is the behaviour this replaced.
+
+    private var isDocked: Bool {
+        if case .existing = DraftStore.shared.draft.target { return true }
+        return false
+    }
+
+    private var polarityTimer: Timer?
+    private var sampleInFlight = false
+
+    /// Sample the backdrop and pin (or lift) the window appearance to match.
+    private func applyBackdropPolarity(to target: Panel, hidingUntilSampled: Bool) {
+        guard isDocked else {
+            target.appearance = nil
+            target.alphaValue = 1
+            stopPolarityRefresh()
+            return
+        }
+        if hidingUntilSampled { target.alphaValue = 0 }
+        BackdropSample.requestAccessIfNeeded()
+        startPolarityRefresh()
+        // One sample at a time: a wedged capture never returns, and an
+        // unguarded 1 Hz tick would bury the process in suspended tasks.
+        guard !sampleInFlight else { return }
+        sampleInFlight = true
+        let rect = backdropRect(for: target.frame)
+        Task { [weak self] in
+            let luminance = await BackdropSample.luminance(behind: rect)
+            self?.sampleInFlight = false
+            self?.apply(luminance, to: target, reveal: hidingUntilSampled)
+        }
+        if hidingUntilSampled {
+            // **Reveal insurance.** A capture that never lands must not hold
+            // the panel invisible: after 1.5 s the system appearance governs
+            // and the panel shows — the behaviour this feature replaced.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+                MainActor.assumeIsolated {
+                    guard let self, target.alphaValue == 0 else { return }
+                    self.sampleInFlight = false
+                    target.appearance = nil
+                    target.alphaValue = 1
+                }
+            }
+        }
+    }
+
+    /// A nil sample leaves the current pin alone — flapping back to the
+    /// system setting mid-showing is worse than holding a possibly stale one
+    /// for a tick — except at show time, where there is no pin yet and the
+    /// system setting governs, as before the sample existed.
+    private func apply(_ luminance: CGFloat?, to target: Panel, reveal: Bool) {
+        if let luminance {
+            let named: NSAppearance.Name = BackdropSample.isLight(luminance) ? .aqua : .darkAqua
+            if target.appearance?.name != named {
+                target.appearance = NSAppearance(named: named)
+            }
+        } else if reveal {
+            // No grant or failed capture: the system setting governs, as before.
+            target.appearance = nil
+        }
+        if reveal { target.alphaValue = 1 }
+    }
+
+    /// The docked wash column's rect in screen coordinates — the window frame
+    /// narrowed to the column (right-aligned in the canvas) and cut above the
+    /// empty top slack. Sampling the full canvas would dilute the average with
+    /// backdrop the panel never covers; this is the region it actually
+    /// occludes.
+    private func backdropRect(for frame: NSRect) -> NSRect {
+        let columnWidth = WashView.columnWidth + 20
+        let width = min(frame.width, columnWidth)
+        return NSRect(
+            x: frame.maxX - width,
+            y: frame.minY,
+            width: width,
+            height: frame.height - Self.topSlack
+        )
+    }
+
+    private func startPolarityRefresh() {
+        guard polarityTimer == nil else { return }
+        let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
+            // The timer was added to the main run loop from the main actor, so
+            // its block really is on the main actor; stating it beats spawning
+            // a Task per tick.
+            MainActor.assumeIsolated {
+                self?.refreshPolarity()
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        polarityTimer = timer
+    }
+
+    private func stopPolarityRefresh() {
+        polarityTimer?.invalidate()
+        polarityTimer = nil
+    }
+
+    /// One backdrop re-check per tick. The docked panel is stationary, so the
+    /// backdrop only changes when the user moves or scrolls windows under it —
+    /// nothing Sotto can observe — hence the poll rather than an observer. The
+    /// timer ends itself the moment the docked state does.
+    private func refreshPolarity() {
+        guard let panel, panel.isVisible, isDocked else {
+            stopPolarityRefresh()
+            return
+        }
+        applyBackdropPolarity(to: panel, hidingUntilSampled: false)
+    }
+
     // MARK: - The panel
 
     /// **Escape priority stack §10.4.** Exactly one action fires top-down:
@@ -208,24 +395,15 @@ final class OverlayPanel {
         override var canBecomeKey: Bool { true }
 
         override func cancelOperation(_ sender: Any?) {
-            // §10.4 exactly one top-down: scrim preempts, then 1/2 already
-            // handled on the tap, then 3/4 here. No global monitor when idle
-            // is enforced in EventTap; this handler only runs when the panel
-            // is key (spec: "panel cancelOperation is handler when key").
-            if EventTap.escapeHandledOnMain {
-                EventTap.escapeHandledOnMain = false
-                return
-            }
-            // Scrim preempts all four (§10.4, slice 13).
-            // if Scrim.shared.isPresented { Scrim.shared.dismiss(); return }
-            // Priority 3: stop chat generation before closing.
-            if Activity.shared.active.contains(.generating) {
-                Activity.shared.set(.generating, false)
-                NotificationCenter.default.post(name: .sottoCancelGeneration, object: nil)
-                return
-            }
-            // Priority 4: close overlay.
-            OverlayPanel.shared.hide()
+            // §10.4 exactly one top-down. 1 runs on the tap; 2–4 run from the
+            // tap's main-queue block (`escRemainderFromTap`), which the tap
+            // dispatches for every Esc it did not abort. Every Esc the tap sees
+            // is therefore marked before it is delivered, and this handler —
+            // which only runs while the panel is key — has nothing of its own
+            // to do: consuming the mark is the whole job. An unmarked Esc here
+            // means the press bypassed the tap; doing nothing keeps exactly-one
+            // honest (the mark's doc comment has the cases).
+            if EventTap.shared.consumeEscapeHandled() { return }
         }
 
         /// **The caret goes into the composer on every show, not just the first.**
@@ -318,10 +496,6 @@ final class OverlayPanel {
     private func position(_ panel: Panel) {
         guard let screen = NSScreen.main ?? NSScreen.screens.first else { return }
         // Frame 2: right-docked 560pt wash column; Frame 3: centered bare bar (gap 1 closed).
-        let isDocked: Bool = {
-            if case .existing = DraftStore.shared.draft.target { return true }
-            return false
-        }()
         let x: CGFloat = isDocked
             ? screen.visibleFrame.maxX - panel.frame.width // right-docked, no panel edge
             : screen.frame.midX - panel.frame.width / 2 // centered bare bar

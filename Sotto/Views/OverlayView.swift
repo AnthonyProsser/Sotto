@@ -9,6 +9,7 @@
 import SwiftUI
 import AppKit
 import UniformTypeIdentifiers
+import os
 
 /// The compose surface: add-context `+`, message field, chat control, send
 /// (§5.8).
@@ -17,14 +18,18 @@ import UniformTypeIdentifiers
 /// 52 pt line. Frame 3 — the same bar with chips and a two-line draft — stacks
 /// them: chips, then the field, then a control row underneath. Nothing in the PDF
 /// draws the state between them, so the rule is this file's, stated plainly: the
-/// bar is **inline while the draft is one line with no attachments**, and
-/// **stacked otherwise**.
+/// bar is **inline while the draft is one line at the inline width with no
+/// attachments**, and **stacked otherwise**. The trigger is the field's laid-out
+/// line count (`ComposerField.overflow`), never its height — the raw natural
+/// line box is 26⅓ pt against the drawn 24 (`ComposerField.paragraphStyle` for
+/// how the row is held at 24), so a height test cannot separate one short line
+/// from two, and it fired on the first keystroke for a day (measured 2026-09-01).
 ///
-/// **The way back is emptiness, not height, and that is deliberate.** The field is
+/// **The way back is emptiness, not length, and that is deliberate.** The field is
 /// wider stacked than inline, so a draft that wraps to two lines inline may fit on
-/// one line stacked — a height test in both directions oscillates on exactly the
-/// string that triggers it. Collapsing only when the text and the chips are both
-/// empty makes the transition happen once on the way out and once on the way back.
+/// one line stacked — a two-direction test oscillates on exactly the string that
+/// triggers it. Collapsing only when the text and the chips are both empty makes
+/// the transition happen once on the way out and once on the way back.
 ///
 /// **Everything here is one consumer's local constant, not a token.** The
 /// pre-approved tier-2 slot for this slice is *overlay intrusiveness* — width
@@ -34,10 +39,15 @@ import UniformTypeIdentifiers
 /// `Token` is the material, because `Token.Material` already reserves the role by
 /// name and Anthony ruled on the HUD's twin the same way.
 ///
-/// **The appearance is not pinned, and that is deliberate.** `HUDPanel` pins
-/// because its labels would invert mid-dictation under a surface the user is not
-/// looking at; the overlay is the surface the user *is* looking at, and
-/// `rules/design.md` §6.7 says the branch does not generalise.
+/// **The bare bar's appearance is not pinned, and that is deliberate.** It is
+/// glass, and the render server flips it from the luminance behind it —
+/// `HUDPanel` pins because its labels would invert mid-dictation under a
+/// surface the user is not looking at; this is the surface the user *is*
+/// looking at, and `rules/design.md` §6.7 says the branch does not generalise.
+/// **The docked panel is the one pinned surface:** its wash is not glass and
+/// cannot flip itself, so `OverlayPanel` pins the window's appearance from a
+/// backdrop sample while a chat is open (`DECISIONS.md`, 2026-09-02), and
+/// lifts the pin the moment the bare state returns.
 struct OverlayView: View {
     /// §6.1's 600 pt bar. A ratio of the display was considered and is not what
     /// the design draws — nothing in the bar scales with the screen, and a
@@ -95,8 +105,24 @@ struct OverlayView: View {
     /// for why it is not the drawn 144.
     private static let fieldMaxLines = 6
 
+    /// The wash's top edge above the conversation viewport. The ramp spans
+    /// `WashView.feather` (40), so 48 puts full tint 8 pt above the first line
+    /// of conversation — Anthony, 2026-09-01: the no-tint→tint change "can
+    /// continue increasing another 20 pixels into the chat panel" and should
+    /// sit "a little bit higher from the top of the text" than the 24 pt it
+    /// had. One edit to change.
+    private static let topInset: CGFloat = 48
+
+    /// The docked content's gutter on both sides of the wash. Derived, not
+    /// picked: the wash is `columnWidth + 20` and the content is the drawn
+    /// 452 pt wide, so an equal gutter is 34. One edit to change.
+    private static let sideInset: CGFloat = (WashView.columnWidth + 20 - 452) / 2
+
     @State private var store = DraftStore.shared
     @State private var fieldHeight: CGFloat = OverlayView.lineHeight
+    /// The draft needs a second line at the inline width (`ComposerField`).
+    /// This, not the field's height, is what expands the bar.
+    @State private var fieldOverflow = false
     @State private var expanded = false
     @State private var recents: [DraftStore.RecentChat] = []
     @State private var isDropTargeted = false
@@ -132,9 +158,11 @@ struct OverlayView: View {
         .onAppear {
             store.applyContinuityIfNeeded()
             recents = store.recentChats(limit: 8)
-            // Initialize expanded from draft emptiness, not height, to avoid oscillation (B).
-            expanded = !store.draft.isEmpty || fieldHeight > Self.lineHeight + 1
-            if !store.draft.text.isEmpty || !store.draft.attachments.isEmpty { expanded = true }
+            // Chips force the stacked shape; the draft's text does not — a
+            // one-line restored draft types on the control row like a fresh one
+            // (DECISIONS.md 2026-09-01), and the field's own overflow report
+            // expands the bar within a tick when the restored text fills it.
+            expanded = !store.draft.attachments.isEmpty
         }
         // Retarget moves the window, not just the next show: docked is a
         // property of the target (Frame 2 vs Frame 3), so switching chats in
@@ -143,8 +171,8 @@ struct OverlayView: View {
         .onChange(of: store.draft.target) { _, _ in
             OverlayPanel.shared.reposition()
         }
-        .onChange(of: fieldHeight) { _, height in
-            if height > Self.lineHeight + 1 { expanded = true }
+        .onChange(of: fieldOverflow) { _, overflow in
+            if overflow { expanded = true }
         }
         .onChange(of: store.draft.attachments) { _, chips in
             if !chips.isEmpty { expanded = true }
@@ -188,36 +216,59 @@ struct OverlayView: View {
     }
 
     /// Frame 2, rebuilt per "Chat panel light and dark mode.pdf" (2026-09-01):
-    /// a 500 pt wash field bottom-right, the conversation read-only above the
-    /// in-panel composer. The field hugs its content — top padding 24 is the
-    /// drawing's "top edge 24 pt above the first line of text"; the bottom sits
-    /// at the panel anchor, 16 pt above `visibleFrame` (the drawn 15 within
-    /// rounding) — and the canvas caps it at 70 % of usable height, where the
-    /// conversation body becomes the sole scroll region (§5.8).
+    /// a wash field bottom-right, the conversation read-only above the
+    /// in-panel composer. **The field reaches the screen's right edge and the
+    /// window's bottom edge** (Anthony, 2026-09-01, "I can tell exactly where
+    /// the gradient starts") — the old field stopped at the column's own rect,
+    /// so its 20 pt feather was cut off before it finished and the edge read
+    /// as a seam. The content's insets are unchanged: what moved is the
+    /// boundary between wash and world, not the position of anything in it.
+    /// The canvas caps it at 70 % of usable height, where the conversation
+    /// body becomes the sole scroll region (§5.8).
     private var dockedPanel: some View {
         VStack(spacing: 0) {
             ConversationView(
                 slug: slug,
-                maxHeight: OverlayView.maxHeight(for: NSScreen.main) - 150,
+                maxHeight: OverlayView.maxHeight(for: NSScreen.main) - composerReserve,
                 reload: conversationReload
             )
             Spacer(minLength: 0).frame(height: 10)
             panelComposer
         }
-        .padding(.top, 24)
-        .padding(.horizontal, 24)
-        .padding(.bottom, 15)
-        .frame(width: WashView.columnWidth)
+        .padding(.top, Self.topInset)
+        // Equal side insets, so the content is centred on the wash it sits in
+        // (Anthony, 2026-09-01: "the chat bar… seems to not be centered
+        // compared to the background… needs to be moved right a little bit").
+        // It was 24 leading / 44 trailing: the content held the position it had
+        // in the old 500 pt field while the field itself grew 20 pt rightward
+        // to reach the screen edge, which left it 10 pt left of centre. The
+        // drawn 24 pt gutter is what gives way, because the drawing measured it
+        // against the narrower field.
+        .padding(.horizontal, Self.sideInset)
+        .padding(.bottom, 15 + OverlayPanel.bottomSlack)
+        .frame(width: WashView.columnWidth + 20)
         .background { WashView().allowsHitTesting(false) }
-        // Right edge 20 pt in from the screen edge — half the drawn 40 pt gap
-        // to the composer — with the canvas's right edge already at the screen
-        // edge when docked (`OverlayPanel.position`).
-        .padding(.trailing, 20)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
         .overlay {
             if isDropTargeted { dropAffordance }
         }
         .onDrop(of: [.image, .fileURL, .png, .tiff], isTargeted: $isDropTargeted, perform: handleDrop)
+    }
+
+    /// What the conversation must leave room for below itself: the spacer, the
+    /// composer at its *current* shape, and the wash's top and bottom insets.
+    /// Was a fixed 150, sized for the inline bar — with a stacked composer the
+    /// panel outgrew the canvas and the wash's feathered top edge clipped
+    /// against the window top, the same seam class as the truncated-edge bug
+    /// that moved the field to the screen edge.
+    private var composerReserve: CGFloat {
+        10 + composerHeight + Self.topInset + 15 + OverlayPanel.bottomSlack
+    }
+
+    private var composerHeight: CGFloat {
+        expanded
+            ? Self.padTop + fieldHeight + Self.fieldGap + Self.control + Self.padBottom
+            : Self.barHeight
     }
 
     /// **The same chat bar as the bare state, at panel width** (Anthony,
@@ -299,6 +350,7 @@ struct OverlayView: View {
                 text: textBinding,
                 maxLines: Self.fieldMaxLines,
                 height: $fieldHeight,
+                overflow: $fieldOverflow,
                 onSend: send,
                 onImagePaste: { data, name in store.addImage(filename: name, data: data) }
             )
@@ -378,6 +430,11 @@ struct OverlayView: View {
         }
         .buttonStyle(.plain)
         .disabled(store.draft.isEmpty)
+        // Return has two paths to `send()` — this shortcut through the key-
+        // equivalent pass, and ComposerField's `insertNewline` through the
+        // first responder. Whichever fires first empties the draft
+        // synchronously, so the other hits `send()`'s empty guard: one press,
+        // one turn.
         .keyboardShortcut(.return, modifiers: [])
     }
 
@@ -511,7 +568,11 @@ struct OverlayView: View {
             recents = store.recentChats(limit: 8)
             conversationReload += 1
         } catch {
-            // Validation only (empty) — already guarded. Loud in chat, not HUD (§14.3).
+            // Empty is guarded above, so a throw here is a real disk failure:
+            // the chat folder was not written and the draft is untouched, but
+            // the user saw nothing happen. Logged for diagnosis; a user-visible
+            // error surface for send failures is a later question.
+            DraftStore.log.error("Send failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 }

@@ -2,79 +2,113 @@
 //  DraftStore.swift
 //  Sotto
 //
-//  Slice 9 — draft persistence, §5.2. Exact text+attachments across close AND
-//  kill/relaunch via atomic ~/Library/Application Support/Sotto/draft.json.
-//  Observable with DidSet save, delete empty.
+//  Slice 9 — draft persistence, §5.2. Text+attachments survive close and
+//  relaunch via atomic ~/Library/Application Support/Sotto/draft.json. Saves
+//  coalesce for 300 ms and flush on overlay hide and quit, so a force-kill can
+//  lose the last 300 ms of typing (DECISIONS.md, 2026-09-02). Delete empty.
 //
 
+import AppKit
 import Foundation
 import Observation
+import os
 
 @Observable
 final class DraftStore {
     static let shared = DraftStore()
 
+    /// Draft persistence failures — save, load, and the send path's catch.
+    static let log = Logger(subsystem: "com.anthonyprosser.Sotto", category: "drafts")
+
     var draft: Draft {
-        didSet { save() }
+        didSet { scheduleSave() }
     }
 
     // MARK: - Persistence
 
+    /// Test seam: when set, every save/load/delete lands here instead of the
+    /// real Application Support file.
+    static var fileURLForTesting: URL?
+
     static var fileURL: URL {
+        if let override = fileURLForTesting { return override }
         let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Sotto", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir.appendingPathComponent("draft.json")
     }
 
-    private var isLoading = false
-
     init() {
         self.draft = Self.load()
+        // Flush the coalesced save on the way out, so a normal quit loses
+        // nothing (a force-kill loses at most `saveDelay` of typing).
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.willTerminateNotification, object: nil, queue: .main
+        ) { [weak self] _ in self?.forceSave() }
     }
 
     init(draft: Draft) {
-        // For tests / previews, no load.
+        // For tests / previews, no load, no quit observer.
         self.draft = draft
     }
 
     private static func load() -> Draft {
         let url = fileURL
         guard FileManager.default.fileExists(atPath: url.path) else { return Draft() }
-        guard let data = try? Data(contentsOf: url) else { return Draft() }
+        guard let data = try? Data(contentsOf: url) else {
+            log.error("Draft file unreadable: \(url.path, privacy: .public)")
+            return Draft()
+        }
         if let decoded = try? JSONDecoder().decode(Draft.self, from: data) {
             return decoded
         }
         // Corrupt file — delete and start empty (don't crash).
+        log.error("Draft file corrupt, deleting: \(url.path, privacy: .public)")
         try? FileManager.default.removeItem(at: url)
         return Draft()
     }
 
-    private func save() {
-        if isLoading { return }
-        let url = Self.fileURL
-        if draft.isEmpty && draft.target == .new {
-            // Delete empty draft.jsons per gate requirement (everything inside on draft.json)
-            if FileManager.default.fileExists(atPath: url.path) {
-                try? FileManager.default.removeItem(at: url)
-            }
-            return
-        }
-        // Also delete if isEmpty but target is .existing? Keep target? No — if text and attachments empty, delete regardless per spec.
-        if draft.isEmpty {
-            if FileManager.default.fileExists(atPath: url.path) {
-                try? FileManager.default.removeItem(at: url)
-            }
-            return
-        }
-        guard let data = try? JSONEncoder().encode(draft) else { return }
-        // Atomic via .atomic + create intermediate
-        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try? data.write(to: url, options: .atomic)
+    /// How long a save waits for another keystroke. The window a force-kill can
+    /// lose (DECISIONS.md, 2026-09-02): a keystroke with an image attached
+    /// re-encodes and rewrites the whole image, so writes coalesce rather than
+    /// run per keystroke.
+    private static let saveDelay: TimeInterval = 0.3
+    private var pendingSave: DispatchWorkItem?
+
+    private func scheduleSave() {
+        pendingSave?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.save() }
+        pendingSave = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.saveDelay, execute: work)
     }
 
-    // Explicit save for coalesced Batch updates (if needed).
-    func forceSave() { save() }
+    /// Flush any coalesced save now — overlay hide and app quit call this, so
+    /// the only loss window is a force-kill inside `saveDelay`.
+    func forceSave() {
+        pendingSave?.cancel()
+        pendingSave = nil
+        save()
+    }
+
+    private func save() {
+        let url = Self.fileURL
+        do {
+            if draft.isEmpty {
+                // Empty draft — delete draft.json regardless of target (spec).
+                if FileManager.default.fileExists(atPath: url.path) {
+                    try FileManager.default.removeItem(at: url)
+                }
+                return
+            }
+            // Atomic via .atomic + create intermediate
+            let data = try JSONEncoder().encode(draft)
+            try FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try data.write(to: url, options: .atomic)
+        } catch {
+            Self.log.error("Draft save failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
 
     func reset() {
         draft = Draft()
