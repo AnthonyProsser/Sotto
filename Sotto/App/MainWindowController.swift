@@ -40,7 +40,14 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             defer: false
         )
         window.titlebarAppearsTransparent = true
-        window.titleVisibility = .hidden
+        // **Visible, as of Slice 10** (`DECISIONS.md`) — the chat/audio name and
+        // date moved off an in-content header strip into the title chrome, with
+        // the pin as a toolbar item. This un-hides the half of the 2026-08-15
+        // Safari-shape note that hid the title; the transparent titlebar,
+        // full-size content, and edge-to-edge sidebar are unchanged, and Safari
+        // and Mail show a title in exactly this shape. SwiftUI's
+        // `.navigationTitle` / `.navigationSubtitle` on each detail drive it.
+        window.titleVisibility = .visible
         window.title = "Sotto"
         window.isReleasedWhenClosed = false
         window.setFrameAutosaveName("SottoMainWindow")
@@ -63,8 +70,11 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         window?.makeKeyAndOrderFront(nil)
         Activity.shared.set(.mainWindow, true)
         // The window is usually closed while dictations are being recorded and
-        // evicted, so what the list last held is stale by definition.
+        // evicted, so what the list last held is stale by definition. Chats can
+        // change the same way — the overlay sends into them while the window is
+        // shut.
         AudioLibrary.shared.refresh()
+        ChatLibrary.shared.refresh()
     }
 
     /// **History…** in the menu bar (§10.1), which is a workspace action and lands

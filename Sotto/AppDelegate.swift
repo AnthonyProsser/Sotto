@@ -46,6 +46,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // the analyzer's audio format — all of it before the first gesture, so
         // that starting a recording costs no `await`.
         Dictation.shared.prepare()
+        // Every model already on disk becomes a chat backend before the first
+        // send — slice 7's chat cannot run a local model it has no way to name.
+        ChatEngine.shared.registerLocalModels()
     }
 
     @objc private func handleWake() {

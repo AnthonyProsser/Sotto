@@ -44,7 +44,7 @@ final class OverlayPanel {
     /// the left or right subtracts nothing from the bottom, so the bar drops to
     /// the same clearance above the screen edge, and an auto-hidden Dock leaves
     /// only its few-point reveal strip, so the bar sits low until the Dock comes
-    /// up over it — and the panel is at `.statusBar` level, above the Dock's, so
+    /// up over it — and the panel is at `.popUpMenu` level, above the Dock's, so
     /// the bar stays readable when it does.
     ///
     /// 16 pt is the design PDF's number ("16 pt clear of the dock"). The token
@@ -78,6 +78,17 @@ final class OverlayPanel {
     /// Side slack, so the glass can bleed its rim and specular edge outside the
     /// bar's own rect without the window clipping them.
     private static let sideSlack: CGFloat = 24
+
+    /// `.fullScreenAuxiliary` makes it show over a full-screen app,
+    /// `.canJoinAllSpaces` stops it being stranded on the Space the gesture
+    /// fired from, and `.transient` keeps it out of Mission Control and orders
+    /// it correctly among auxiliary windows — the HUD's set, verbatim.
+    ///
+    /// **One constant because it is set twice** — at `make()` and again on
+    /// every `show()`, where the re-assertion is what survives a Space change.
+    /// Two literals would be the pair that drifts.
+    private static let collectionBehavior: NSWindow.CollectionBehavior =
+        [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle, .transient]
 
     private var panel: Panel?
     var isVisible: Bool { panel?.isVisible == true }
@@ -128,6 +139,17 @@ final class OverlayPanel {
     private var previousApp: NSRunningApplication?
 
     func show() {
+        // **Heal an orphan before anything reads the panel** — `HUDPanel
+        // .ensurePanel`'s guard, for the same reason. A window-server
+        // reconnect (wake, a Space change, a display reconfigure) leaves the
+        // `NSPanel` object alive with an invalid `CGWindowID`, and every
+        // `orderFront` on it is a silent no-op: `isVisible` stays false and
+        // nothing appears. `isVisible == false` alone is not the test — the
+        // overlay is normally hidden between showings — `windowNumber` is.
+        if let existing = self.panel, existing.windowNumber <= 0 {
+            existing.orderOut(nil)
+            self.panel = nil
+        }
         let panel = self.panel ?? make()
         // Resize canvas if screen changed since panel was created (§5.8 cap rule).
         if let screen = NSScreen.main ?? NSScreen.screens.first {
@@ -168,7 +190,28 @@ final class OverlayPanel {
         // surface the user just summoned with a hotkey." That is the case this
         // parameter exists for.
         NSApp.activate(ignoringOtherApps: true)
+        // **Re-asserted on every show, not just at `make()`** — the other half
+        // of the HUD's `2b6ef70` fix (`HUDPanel.panel(orderingFront:)`). A panel
+        // that has survived a Space change or a wake can come back without its
+        // auxiliary status, and a level or collection behaviour set once at
+        // construction is exactly what goes stale; re-stating them costs two
+        // assignments and is what keeps the surface over a full-screen app for
+        // the second and every later showing rather than only the first.
+        panel.level = .popUpMenu
+        panel.collectionBehavior = Self.collectionBehavior
         panel.makeKeyAndOrderFront(nil)
+        // **Full-screen Spaces.** A plain order-front is clipped to the app's own
+        // Space, and `.statusBar` level did not reliably sit above a full-screen
+        // app's window ordering — the same finding `HUDPanel` records. The fix is
+        // the HUD's, from commit `2b6ef70`: `.popUpMenu` level plus
+        // `orderFrontRegardless()` (with the retry the HUD also carries for the
+        // window-server-returns-nothing case). The overlay additionally becomes
+        // key here, which the HUD never does, so `makeKeyAndOrderFront` stays and
+        // this follows it.
+        panel.orderFrontRegardless()
+        if !panel.isVisible || panel.windowNumber <= 0 {
+            panel.orderFrontRegardless()
+        }
         // The caret goes in the field on every show, not just the first — the
         // panel is built once and reused, so first responder does not reset
         // itself between showings (§5.8: the surface is summoned to be typed
@@ -179,6 +222,10 @@ final class OverlayPanel {
         // too late would flash the system polarity for a frame or two (the
         // polarity MARK below).
         applyBackdropPolarity(to: panel, hidingUntilSampled: true)
+        // The docked panel lands on its newest turn — posted on every show
+        // because re-showing onto an already-docked chat does not remount the
+        // conversation view (`ConversationView.onReceive`).
+        NotificationCenter.default.post(name: .sottoOverlayDidShow, object: nil)
     }
 
     func hide() {
@@ -278,15 +325,44 @@ final class OverlayPanel {
     private var polarityTimer: Timer?
     private var sampleInFlight = false
 
+    /// **The show is hiding the panel until a sample lands, and it is a
+    /// property of the showing rather than of the sample.** It was a parameter
+    /// carried into the capture's completion, which is what let a docked
+    /// overlay come back invisible: a capture still running from the previous
+    /// showing carries that showing's `reveal: false`, the in-flight guard
+    /// below returned before the insurance timer was scheduled, and the panel
+    /// sat at zero alpha with nothing left to raise it. Reading it as state at
+    /// completion means whichever sample lands first reveals.
+    private var awaitingReveal = false
+
     /// Sample the backdrop and pin (or lift) the window appearance to match.
     private func applyBackdropPolarity(to target: Panel, hidingUntilSampled: Bool) {
         guard isDocked else {
             target.appearance = nil
+            awaitingReveal = false
             target.alphaValue = 1
             stopPolarityRefresh()
             return
         }
-        if hidingUntilSampled { target.alphaValue = 0 }
+        if hidingUntilSampled {
+            target.alphaValue = 0
+            awaitingReveal = true
+            // **Reveal insurance, scheduled before the in-flight guard.** A
+            // capture that never lands must not hold the panel invisible:
+            // after 1.5 s the system appearance governs and the panel shows —
+            // the behaviour this feature replaced. It has to be armed on every
+            // hiding show, including the ones that find a sample already
+            // running, or that show has no route back to visible at all.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+                MainActor.assumeIsolated {
+                    guard let self, self.awaitingReveal else { return }
+                    self.awaitingReveal = false
+                    self.sampleInFlight = false
+                    target.appearance = nil
+                    target.alphaValue = 1
+                }
+            }
+        }
         BackdropSample.requestAccessIfNeeded()
         startPolarityRefresh()
         // One sample at a time: a wedged capture never returns, and an
@@ -297,20 +373,7 @@ final class OverlayPanel {
         Task { [weak self] in
             let luminance = await BackdropSample.luminance(behind: rect)
             self?.sampleInFlight = false
-            self?.apply(luminance, to: target, reveal: hidingUntilSampled)
-        }
-        if hidingUntilSampled {
-            // **Reveal insurance.** A capture that never lands must not hold
-            // the panel invisible: after 1.5 s the system appearance governs
-            // and the panel shows — the behaviour this feature replaced.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
-                MainActor.assumeIsolated {
-                    guard let self, target.alphaValue == 0 else { return }
-                    self.sampleInFlight = false
-                    target.appearance = nil
-                    target.alphaValue = 1
-                }
-            }
+            self?.apply(luminance, to: target)
         }
     }
 
@@ -318,7 +381,8 @@ final class OverlayPanel {
     /// system setting mid-showing is worse than holding a possibly stale one
     /// for a tick — except at show time, where there is no pin yet and the
     /// system setting governs, as before the sample existed.
-    private func apply(_ luminance: CGFloat?, to target: Panel, reveal: Bool) {
+    private func apply(_ luminance: CGFloat?, to target: Panel) {
+        let reveal = awaitingReveal
         if let luminance {
             let named: NSAppearance.Name = BackdropSample.isLight(luminance) ? .aqua : .darkAqua
             if target.appearance?.name != named {
@@ -328,7 +392,10 @@ final class OverlayPanel {
             // No grant or failed capture: the system setting governs, as before.
             target.appearance = nil
         }
-        if reveal { target.alphaValue = 1 }
+        if reveal {
+            awaitingReveal = false
+            target.alphaValue = 1
+        }
     }
 
     /// The docked wash column's rect in screen coordinates — the window frame
@@ -464,10 +531,13 @@ final class OverlayPanel {
         // `rules/design.md` §4.3 already owns it. Nothing here needs undoing for
         // it.
         panel.ignoresMouseEvents = false
-        // Above the Dock, which the bar deliberately sits close to, and above
-        // ordinary floating windows.
-        panel.level = .statusBar
-        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
+        // **`.popUpMenu` (101), not `.statusBar` (25)** — the overlay has to be
+        // visible over a full-screen app the same way the HUD is, and `.statusBar`
+        // "was not reliably above a full-screen Space's window ordering"
+        // (`HUDPanel`, commit `2b6ef70`). Still above the Dock, which the bar sits
+        // close to, and still below `.screenSaver` (1000).
+        panel.level = .popUpMenu
+        panel.collectionBehavior = Self.collectionBehavior
 
         let host = NSHostingView(rootView: OverlayView())
         host.frame = NSRect(origin: .zero, size: size)

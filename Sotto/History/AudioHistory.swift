@@ -342,4 +342,10 @@ extension Notification.Name {
     /// notification" is about the user-facing kind — this one is `NotificationCenter`.
     static let audioHistoryDidChange = Notification.Name("SottoAudioHistoryDidChange")
     static let sottoCancelGeneration = Notification.Name("SottoCancelGeneration")
+
+    /// Posted by `OverlayPanel.show()` at the end of every show. The docked
+    /// panel's `ConversationView` lands on its newest turn when it fires —
+    /// re-showing onto an already-docked chat does not remount the view, so
+    /// `onAppear` alone would only scroll the first time (Slice 10).
+    static let sottoOverlayDidShow = Notification.Name("SottoOverlayDidShow")
 }

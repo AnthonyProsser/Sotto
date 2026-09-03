@@ -14,10 +14,6 @@ import SwiftUI
 final class MainWindowState {
     var mode: Mode = .chat
     var showingSettings = false
-    /// Slice 10's, held here for the same reason the Audio side's lives on
-    /// `AudioLibrary`: §10.2 scopes search to the mode, so each mode keeps its own
-    /// text and switching modes never carries a query across.
-    var chatSearch = ""
 
     var settingsSection: SettingsSection = .general
     var columns: NavigationSplitViewVisibility = .all
@@ -92,6 +88,12 @@ struct MainWindowView: View {
     /// lifetime. `MainWindowController` refreshes it on open.
     @Bindable private var library = AudioLibrary.shared
 
+    /// The Chat twin of `library` — same reload-on-open reason, and its own
+    /// `search`, mirroring `AudioLibrary`'s rather than routing through
+    /// `MainWindowState` (§10.2's one-field-per-mode rule still holds; the
+    /// field just lives on the library each mode already owns).
+    @Bindable private var chatLibrary = ChatLibrary.shared
+
     /// Ties the one selection capsule to whichever segment is current, so the
     /// capsule moves rather than being redrawn in a new place.
     @Namespace private var modeSelection
@@ -155,7 +157,7 @@ struct MainWindowView: View {
 
     private var searchText: Binding<String> {
         switch state.mode {
-        case .chat: $state.chatSearch
+        case .chat: $chatLibrary.search
         case .audio: $library.search
         }
     }
@@ -232,17 +234,16 @@ struct MainWindowView: View {
         .padding(.bottom)
     }
 
-    /// The recording list is slice 6's; the chat list is slice 10's and is still
-    /// the empty `List` slice 1 left. **Each mode owns its own search field**
-    /// (§10.2), which is why `.searchable` is inside `AudioSidebar` rather than
-    /// out here — a field applied to the sidebar itself would survive a mode
-    /// switch and search the wrong thing.
+    /// The recording list is slice 6's; the chat list is slice 10's. **Each
+    /// mode owns its own search field** (§10.2) via `searchText`'s per-mode
+    /// binding above — `.searchable` itself is applied once, on
+    /// `sidebarContent`, because the modifier always renders at the sidebar's
+    /// top regardless of how deep it is written (see `sidebar` below).
     @ViewBuilder
     private var modeList: some View {
         switch state.mode {
         case .chat:
-            List {}
-                .listStyle(.sidebar)
+            ChatSidebar(library: chatLibrary)
         case .audio:
             AudioSidebar(library: library)
         }
@@ -292,7 +293,7 @@ struct MainWindowView: View {
         } else {
             switch state.mode {
             case .chat:
-                ContentUnavailableView(state.mode.title, systemImage: state.mode.symbol)
+                ChatDetail(library: chatLibrary)
             case .audio:
                 AudioDetail(library: library)
             }

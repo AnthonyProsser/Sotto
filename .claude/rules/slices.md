@@ -98,6 +98,19 @@ Do not build past one of these without asking — `.claude/rules/open-questions.
 - **Import transcription is serialised around active chat generation.** At 60× realtime an import costs cleanup **+76 %** latency and loses **24 %** of its own throughput. Slice 14 waits on a generating response rather than competing with it; slice 9 owns the signal it waits on. Neither applies to microphone dictation, which overlaps freely.
 - **Cleanup and chat each own a `LanguageModelSession`.** Sharing one throws `concurrentRequests` deterministically, and concurrency buys no throughput — the model serialises. `rules/models-and-network.md` §1.1.
 
+### Slice 10 — Chat in the main window
+
+- **Generation wires into both the main window's Chat detail and the overlay's docked panel, not the main window alone** — the build order's line naming the window only predates the overlay having its own send/generate (slice 9). `DECISIONS.md`, 2026-09-02.
+- **The Chat detail carries its own composer**, reusing the overlay's `ComposerField`/`ComposerChips`/`ComposerAddMenu`/`ComposerSendButton`. `DECISIONS.md`, 2026-09-02.
+- **The Chat sidebar's row context menu gets Delete…/Reveal in Finder**, mirroring the Audio sidebar's 2026-08-20 decision. `DECISIONS.md`, 2026-09-02.
+- **Escape/stop wiring needed no code change.** §10.4 priority 3 already generalizes to a main-window-only generation with the overlay closed — `OverlayPanel.escRemainderFromTap`'s priority-3 branch never checked overlay visibility to begin with. `DECISIONS.md`, 2026-09-02.
+- **The main window's title bar is visible again; Chat/Audio name + date + pin live in it** (`.navigationTitle` / `.navigationSubtitle` / a `.primaryAction` toolbar pin), not an in-content header strip. Contradicts the "title hidden" half of the 2026-08-15 Safari-shape note. `DECISIONS.md`, 2026-09-03.
+- **The main window's composer is the overlay's one glass bar**, reused verbatim (`GlassEffectContainer` + `Token.Material.overlay` + `specularRim` + three-stop shadow). The transcript list stays plain — glass is the chat bar only. `DECISIONS.md`, 2026-09-03.
+- **New Chat is the centred glass bar alone, no copy on the pane**; first send flips it to the conversation layout on the same runloop. Supersedes the `ChatDetail` "No Chat Selected" empty state. `DECISIONS.md`, 2026-09-03.
+- **The overlay panel now appears over full-screen apps** — `.popUpMenu` level + `.transient` + `orderFrontRegardless()`, mirroring the HUD's `2b6ef70` fix; it still activates/keys, unlike the HUD. `DECISIONS.md`, 2026-09-03.
+- **The docked overlay panel scrolls to its newest turn on every open** — `OverlayPanel.show()` posts `.sottoOverlayDidShow`, `ConversationView` jumps to bottom on it. `DECISIONS.md`, 2026-09-03.
+- **User turns are labelled `YOU`**, matching the reply's `SOTTO`. `DECISIONS.md`, 2026-09-03.
+
 ### Slice 11 — Profiles, cleanup, and calibration
 
 - **Cleanup defaults to Apple's on-device model**, with `Guardrails.permissiveContentTransformations`. Still per-profile.

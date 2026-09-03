@@ -17,7 +17,9 @@ import os
 final class DraftStore {
     static let shared = DraftStore()
 
-    /// Draft persistence failures — save, load, and the send path's catch.
+    /// Draft persistence failures — save and load. The send path moved to
+    /// `ChatConversation` in slice 10, along with its own failure surface
+    /// (§14.3); this logger keeps its original scope.
     static let log = Logger(subsystem: "com.anthonyprosser.Sotto", category: "drafts")
 
     var draft: Draft {
@@ -140,37 +142,6 @@ final class DraftStore {
 
     func setTarget(_ target: Draft.Target) { draft.target = target }
 
-    // MARK: - Recent chats (picker)
-
-    struct RecentChat: Identifiable, Equatable {
-        let id: UUID
-        let slug: String
-        let title: String?
-        let updated: Date
-        let snippet: String
-        init(id: UUID, slug: String, title: String?, updated: Date, snippet: String = "") {
-            self.id = id; self.slug = slug; self.title = title; self.updated = updated; self.snippet = snippet
-        }
-    }
-
-    /// Recent chats via ChatFolder.root + ChatSerializer, limit 8.
-    func recentChats(limit: Int = 8) -> [RecentChat] {
-        let root = ChatFolder.root
-        guard let contents = try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: [.contentModificationDateKey], options: .skipsHiddenFiles) else { return [] }
-        var out: [RecentChat] = []
-        for url in contents {
-            var isDir: ObjCBool = false
-            guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue else { continue }
-            let mdURL = url.appendingPathComponent("chat.md")
-            guard FileManager.default.fileExists(atPath: mdURL.path) else { continue }
-            guard let md = try? String(contentsOf: mdURL, encoding: .utf8) else { continue }
-            guard let state = try? ChatSerializer.deserialize(markdown: md, defaultSlug: url.lastPathComponent) else { continue }
-            let snippet = state.messages.last?.content.prefix(60).description ?? ""
-            out.append(RecentChat(id: state.id, slug: state.slug, title: state.title, updated: state.updated, snippet: String(snippet)))
-        }
-        return out.sorted { $0.updated > $1.updated }.prefix(limit).map { $0 }
-    }
-
     // MARK: - Continuity
 
     // UserDefaults keys per spec
@@ -227,78 +198,6 @@ final class DraftStore {
 
     /// Alias for WT-A call sites (`applyContinuityIfNeeded`).
     func applyContinuityIfNeeded() { resolveContinuityIfNeeded() }
-
-    // MARK: - Send — commits draft to a chat folder (ported from History store)
-
-    enum DraftError: LocalizedError {
-        case empty
-        var errorDescription: String? { "Draft is empty" }
-    }
-
-    /// Commit draft to disk. Returns the slug written to.
-    /// `modelID` is the current chat model — stored per-turn (§5.3, §9.1).
-    @discardableResult
-    func send(modelID: String = "apple-foundation") throws -> String {
-        let content = draft.serializedContent()
-        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { throw DraftError.empty }
-
-        let imageDatas = draft.imageAttachments()
-
-        switch draft.target {
-        case .new:
-            let base = Self.slugify(trimmed)
-            let uniqueSlug = Self.uniqueSlug(base)
-            let msg = ChatMessage(role: .user, content: trimmed, model: modelID)
-            let state = ChatSessionState(slug: uniqueSlug, models: [modelID], messages: [msg])
-            try ChatFolder.write(slug: uniqueSlug, markdown: ChatSerializer.serialize(state: state), attachments: imageDatas, to: ChatFolder.root)
-            recordSend(slug: uniqueSlug)
-            draft = Draft()
-            return uniqueSlug
-        case .existing(let existingSlug):
-            let folder = ChatFolder.root.appendingPathComponent(existingSlug, isDirectory: true)
-            let mdURL = folder.appendingPathComponent("chat.md")
-            let md = (try? String(contentsOf: mdURL, encoding: .utf8)) ?? ""
-            var existing = (try? ChatSerializer.deserialize(markdown: md, defaultSlug: existingSlug)) ?? ChatSessionState(slug: existingSlug, models: [], messages: [])
-            if !existing.models.contains(modelID) { existing.models.append(modelID) }
-            existing.updated = Date()
-            let msg = ChatMessage(role: .user, content: trimmed, model: modelID)
-            existing.messages.append(msg)
-            var merged = imageDatas
-            let existingAttDir = folder.appendingPathComponent("attachments", isDirectory: true)
-            if let existingFiles = try? FileManager.default.contentsOfDirectory(at: existingAttDir, includingPropertiesForKeys: nil) {
-                for url in existingFiles where merged[url.lastPathComponent] == nil {
-                    if let data = try? Data(contentsOf: url) { merged[url.lastPathComponent] = data }
-                }
-            }
-            try ChatFolder.write(slug: existingSlug, markdown: ChatSerializer.serialize(state: existing), attachments: merged, to: ChatFolder.root)
-            recordSend(slug: existingSlug)
-            // Keep target (stay in same chat) but clear text/attachments for next turn.
-            draft.text = ""
-            draft.attachments = []
-            return existingSlug
-        }
-    }
-
-    private static func slugify(_ text: String) -> String {
-        let base = text.components(separatedBy: .newlines).first ?? text
-        let prefix = String(base.prefix(40)).lowercased()
-        var slug = prefix
-            .replacingOccurrences(of: "[^a-z0-9]+", with: "-", options: .regularExpression)
-            .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
-        if slug.isEmpty { slug = "chat-\(ISO8601DateFormatter().string(from: Date()).prefix(10))" }
-        let date = ISO8601DateFormatter().string(from: Date()).prefix(10)
-        return "\(date)-\(slug)"
-    }
-
-    private static func uniqueSlug(_ slug: String) -> String {
-        var candidate = slug
-        var n = 2
-        while FileManager.default.fileExists(atPath: ChatFolder.root.appendingPathComponent(candidate).path) {
-            candidate = "\(slug)-\(n)"; n += 1
-        }
-        return candidate
-    }
 
     // MARK: - Testing helper
 

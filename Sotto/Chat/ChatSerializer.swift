@@ -9,6 +9,7 @@ nonisolated struct ChatSessionState: Sendable, Codable, Equatable {
     var updated: Date
     var contextSize: Int
     var models: [String]
+    var pinned: Bool
     var messages: [ChatMessage]
 
     init(
@@ -19,6 +20,7 @@ nonisolated struct ChatSessionState: Sendable, Codable, Equatable {
         updated: Date = Date(),
         contextSize: Int = 4096,
         models: [String] = [],
+        pinned: Bool = false,
         messages: [ChatMessage] = []
     ) {
         self.id = id
@@ -28,7 +30,28 @@ nonisolated struct ChatSessionState: Sendable, Codable, Equatable {
         self.updated = updated
         self.contextSize = contextSize
         self.models = models
+        self.pinned = pinned
         self.messages = messages
+    }
+
+    /// **Derived, never stored.** The frontmatter's `title` when a writer set
+    /// one, else the first user message's first line, else the slug.
+    ///
+    /// Lives here rather than on `ChatLibrary.Chat` because the sidebar row is
+    /// no longer the only caller: the window's title bar has to name a chat
+    /// that has been sent but not yet written to disk, and that one has no
+    /// library row to ask. Static so a live `ChatConversation` — which holds
+    /// messages and a slug but no state snapshot — reads the same rule.
+    static func derivedTitle(title: String?, messages: [ChatMessage], slug: String) -> String {
+        if let title, !title.isEmpty { return title }
+        let first = messages.first { $0.role == .user }?.content ?? ""
+        let line = first.components(separatedBy: .newlines).first ?? first
+        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? slug : trimmed
+    }
+
+    var derivedTitle: String {
+        Self.derivedTitle(title: title, messages: messages, slug: slug)
     }
 }
 
@@ -75,6 +98,9 @@ nonisolated enum ChatSerializer {
         out += "slug: \(state.slug)\n"
         if let title = state.title, !title.isEmpty {
             out += "title: \(title)\n"
+        }
+        if state.pinned {
+            out += "pinned: true\n"
         }
         out += "created: \(isoFormatter.string(from: state.created))\n"
         out += "updated: \(isoFormatter.string(from: state.updated))\n"
@@ -196,6 +222,7 @@ nonisolated enum ChatSerializer {
         var updated = Date()
         var contextSize = 4096
         var models: [String] = []
+        var pinned = false
         var inModelsList = false
 
         for rawLine in frontmatter.components(separatedBy: .newlines) {
@@ -221,6 +248,7 @@ nonisolated enum ChatSerializer {
             case "created": if let parsed = parseDate(value) { created = parsed }
             case "updated": if let parsed = parseDate(value) { updated = parsed }
             case "contextSize": if let size = Int(value) { contextSize = size }
+            case "pinned": pinned = value == "true"
             case "models": inModelsList = true
             default: break
             }
@@ -234,6 +262,7 @@ nonisolated enum ChatSerializer {
             updated: updated,
             contextSize: contextSize,
             models: models,
+            pinned: pinned,
             messages: parseMessages(body)
         )
     }
