@@ -289,6 +289,10 @@ struct MainWindowView: View {
                     state.settingsSection.title,
                     systemImage: state.settingsSection.symbol
                 )
+                // Every settings pane names the window, or the Chat/Audio
+                // title (and subtitle) it replaced leaks through.
+                .navigationTitle(state.settingsSection.title)
+                .navigationSubtitle("")
             }
         } else {
             switch state.mode {
