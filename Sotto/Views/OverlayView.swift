@@ -164,6 +164,17 @@ struct OverlayView: View {
             // expands the bar within a tick when the restored text fills it.
             expanded = !store.draft.attachments.isEmpty
         }
+        // Per-show refresh: the panel is built once and reused, so `onAppear`
+        // above runs a single time per process lifetime while `show()` can run
+        // any number — without this the picker keeps the disk snapshot from
+        // the first open until the next send. Posted from `OverlayPanel.show()`
+        // after continuity resolves; the menu itself opens later, so the list
+        // is current whenever it is pulled down.
+        .task {
+            for await _ in NotificationCenter.default.notifications(named: .sottoOverlayDidShow) {
+                recents = store.recentChats(limit: 8)
+            }
+        }
         // Retarget moves the window, not just the next show: docked is a
         // property of the target (Frame 2 vs Frame 3), so switching chats in
         // the menu has to drag the panel with it or the wash column lands
@@ -477,9 +488,9 @@ struct OverlayView: View {
     /// is the system's, so no custom rows, checkmarks, or material here. The
     /// chevron is static — a `Menu` exposes no open state to mirror.
     ///
-    /// `recents` is cached and refreshed on appear and after send rather than
-    /// read in the menu content: body re-evaluates on every keystroke, and
-    /// `recentChats` parses every `chat.md` on disk each call.
+    /// `recents` is cached and refreshed on appear, on every show, and after
+    /// send rather than read in the menu content: body re-evaluates on every
+    /// keystroke, and `recentChats` parses every `chat.md` on disk each call.
     private var chatControl: some View {
         Menu {
             Button("New chat") { store.setTarget(.new) }
