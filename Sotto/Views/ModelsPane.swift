@@ -7,6 +7,7 @@
 //  progress and failures in the surface that started them — never the HUD.
 //
 
+import AppKit
 import SwiftUI
 
 // MARK: - Catalog
@@ -334,7 +335,11 @@ struct ModelsPane: View {
             .padding()
         }
         .task { models.reload() }
-        .settingsToolbar("Models")
+        // The window title, not a toolbar item: macOS 26 draws a bordered
+        // capsule around `.navigation` items, and with no `navigationTitle` set
+        // here the Chat detail's ("New Chat") leaked through on section switch.
+        .navigationTitle("Models")
+        .navigationSubtitle("")
         .toolbar {
             ToolbarItem(placement: .principal) {
                 searchField
@@ -351,34 +356,12 @@ struct ModelsPane: View {
     }
 
     /// §7.4's list plus a filter over it (DECISIONS.md, 2026-08-25): local
-    /// rows only, never a networked model search. In the title bar so the
-    /// detail's scroll content starts at the toolbar's bottom edge with no
-    /// empty titlebar band above it.
-    /// **Height-clamped and capsule-clipped.** The field was tall enough to
-    /// straddle the titlebar/content boundary, and the hairline the system draws
-    /// there showed through the translucent `.quaternary` fill as a stripe
-    /// across the middle (2026-09-03). A fixed 24 pt keeps it centred in the
-    /// toolbar band, clear of the seam.
+    /// rows only, never a networked model search. The system field, so macOS
+    /// draws the fill — the hand-rolled `.quaternary` HStack straddled the
+    /// titlebar/content seam and the seam's hairline read as a stripe.
     private var searchField: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "magnifyingglass")
-                .foregroundStyle(.secondary)
-            TextField("Search models", text: $search)
-                .textFieldStyle(.plain)
-            if !search.isEmpty {
-                Button {
-                    search = ""
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(.tertiary)
-                }
-                .buttonStyle(.plain)
-            }
-        }
-        .padding(.horizontal, 9)
-        .frame(width: 240, height: 24)
-        .background(.quaternary, in: .capsule)
-        .clipShape(.capsule)
+        ModelSearchField(text: $search)
+            .frame(width: 240)
     }
 
     // MARK: Sections
@@ -901,8 +884,44 @@ struct ModelsPane: View {
     }
 }
 
-private extension ModelsState.Candidate {
-    /// The total the current download is measured against, for the row's
+/// `NSSearchField` in the detail toolbar, so the fill, bezel, and Dark Mode
+/// treatment are the system's (Safari's field) rather than authored.
+private struct ModelSearchField: NSViewRepresentable {
+    @Binding var text: String
+
+    func makeNSView(context: Context) -> NSSearchField {
+        let field = NSSearchField()
+        field.placeholderString = "Search models"
+        field.sendsSearchStringImmediately = true
+        field.target = context.coordinator
+        field.action = #selector(Coordinator.changed(_:))
+        return field
+    }
+
+    func updateNSView(_ field: NSSearchField, context: Context) {
+        if field.stringValue != text {
+            field.stringValue = text
+        }
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(text: $text)
+    }
+
+    final class Coordinator: NSObject {
+        var text: Binding<String>
+
+        init(text: Binding<String>) {
+            self.text = text
+        }
+
+        @objc func changed(_ sender: NSSearchField) {
+            text.wrappedValue = sender.stringValue
+        }
+    }
+}
+
+private extension ModelsState.Candidate {    /// The total the current download is measured against, for the row's
     /// "1.6 GB of 2.6 GB" line.
     var downloadTotal: Int64 {
         if case .downloading(_, let total) = phase { return total }

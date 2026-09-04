@@ -98,7 +98,6 @@ struct OverlayView: View {
     private static let padBottom: CGFloat = 13
     private static let chipsGap: CGFloat = 11
     private static let fieldGap: CGFloat = 15
-    private static let chipHeight: CGFloat = 27
     private static let lineHeight: CGFloat = 24
     /// §5.8, unchanged since it was written: six lines, then internal scroll.
     /// The height that comes to is the field's to compute — see `ComposerField`
@@ -128,10 +127,23 @@ struct OverlayView: View {
     /// This, not the field's height, is what expands the bar.
     @State private var fieldOverflow = false
     @State private var expanded = false
-    @State private var recents: [DraftStore.RecentChat] = []
     @State private var isDropTargeted = false
-    /// Bumped after a send so the conversation body re-reads `chat.md`.
+    /// Bumped after a send so a conversation that is not open live re-reads
+    /// `chat.md`.
     @State private var conversationReload = 0
+
+    /// The conversation the docked panel shows, when it is open live — the
+    /// same instance the main window renders, so a reply streamed here
+    /// appears there without a reload. `nil` until slice 10's layer has the
+    /// chat open, and the panel reads the file as before.
+    private var liveConversation: ChatConversation? {
+        guard isDocked else { return nil }
+        return ChatConversations.shared.conversation(slug: slug)
+    }
+
+    /// Only the docked state can generate in place — the bare bar has no
+    /// conversation region to stream into.
+    private var generating: Bool { liveConversation?.isGenerating == true }
 
     private var draft: Draft { store.draft }
     private var textBinding: Binding<String> {
@@ -161,7 +173,6 @@ struct OverlayView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
         .onAppear {
             store.applyContinuityIfNeeded()
-            recents = store.recentChats(limit: 8)
             // Chips force the stacked shape; the draft's text does not — a
             // one-line restored draft types on the control row like a fresh one
             // (DECISIONS.md 2026-09-01), and the field's own overflow report
@@ -245,7 +256,8 @@ struct OverlayView: View {
             ConversationView(
                 slug: slug,
                 maxHeight: OverlayView.maxHeight(for: NSScreen.main) - composerReserve,
-                reload: conversationReload
+                reload: conversationReload,
+                live: liveConversation
             )
             Spacer(minLength: 0).frame(height: 10)
             panelComposer
@@ -388,37 +400,12 @@ struct OverlayView: View {
         }
     }
 
-    /// §5.8 menu — file, screenshot. **Paste path is Cmd+V
-    /// (ComposerField.handleImagePaste). No generic image button here.**
-    /// Screenshot capture is feasible via CGWindowList/ScreenCaptureKit but
-    /// deferred — shown disabled per gate preference (requires Screen
-    /// Recording, don't prompt). Attach Selection is deliberately absent: a
-    /// selection reaches the draft through the §4.9 dictation flow, not the
-    /// menu (Anthony, 2026-09-01).
     private var addContext: some View {
-        Menu {
-            Button("Add File…") { pickFile() }
-            // Feasible via CGWindowList / ScreenCaptureKit (requires Screen
-            // Recording). Shown disabled until capture ships — no prompt now.
-            Button("Screenshot of Last Focused Window") {}
-                .disabled(true)
-            if !store.draft.attachments.isEmpty {
-                Divider()
-                Button("Clear All", role: .destructive) {
-                    store.setAttachments([])
-                }
-            }
-        } label: {
-            Image(systemName: "plus")
-                // Same style as the field it sits beside, so the glyph tracks the
-                // text rather than a number: `.title3` is 15 pt.
-                .font(.title3)
-                .foregroundStyle(.secondary)
-                .frame(width: Self.control, height: Self.control)
-                .contentShape(.rect)
-        }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
+        ComposerAddMenu(
+            onAddFile: pickFile,
+            hasAttachments: !store.draft.attachments.isEmpty,
+            onClear: { store.setAttachments([]) }
+        )
     }
 
     private func pickFile() {
@@ -443,56 +430,31 @@ struct OverlayView: View {
     /// §14.3 rejects a *saturated* send button, not a send button, and no
     /// accent colour yet (Anthony, 2026-09-01: "keep the ruling but change the
     /// percentage — the circle is too subtle"). 12 % ink behind an 80 % ink
-    /// glyph is one step up from gap 3's 7 %/60 %; a ChatGPT-style lighter
-    /// outer circle is the named next step, still without colour. The ChatGPT
-    /// circle shipped and was reverted the same day (Anthony: "revert your
-    /// changes with the bar") — it was built on a misreading of the
-    /// blurrier-on-typing report, and the focus-loss regression that came with
-    /// it needs diagnosing first.
+    /// glyph is one step up from gap 3's 7 %/60 %; the drawing itself lives on
+    /// `ComposerSendButton`, slice 10's shared control. While the docked
+    /// conversation generates, the same control stops it — §5.8's "Send in
+    /// flight, and stop-generation" — and the Return shortcut stands down for
+    /// that state, so a habitual Return mid-stream cannot kill the reply.
+    @ViewBuilder
     private var sendButton: some View {
-        Button(action: send) {
-            Image(systemName: "arrow.up")
-                // `.callout` is 12 pt — the HUD's own precedent for reaching a
-                // size through a named style (`DECISIONS.md`, 2026-08-18).
-                .font(.callout.weight(.medium))
-                .foregroundStyle(.primary.opacity(0.8))
-                .frame(width: Self.control, height: Self.control)
-                .background(.primary.opacity(0.12), in: .circle)
+        if generating {
+            ComposerSendButton(isGenerating: true, action: stop)
+        } else {
+            ComposerSendButton(action: send)
+                .disabled(store.draft.isEmpty)
+                // Return has two paths to `send()` — this shortcut through the key-
+                // equivalent pass, and ComposerField's `insertNewline` through the
+                // first responder. Whichever fires first empties the draft
+                // synchronously, so the other hits `send()`'s empty guard: one press,
+                // one turn.
+                .keyboardShortcut(.return, modifiers: [])
         }
-        .buttonStyle(.plain)
-        .disabled(store.draft.isEmpty)
-        // Return has two paths to `send()` — this shortcut through the key-
-        // equivalent pass, and ComposerField's `insertNewline` through the
-        // first responder. Whichever fires first empties the draft
-        // synchronously, so the other hits `send()`'s empty guard: one press,
-        // one turn.
-        .keyboardShortcut(.return, modifiers: [])
     }
 
-    /// Attachments wrap above the field and count toward intrinsic height (§5.8).
-    /// Accent is on the chips and the caret and nowhere else, per Frame 1's
-    /// caption — `Color.accentColor` is `controlAccentColor`, so the design's
-    /// `#0A84FF` stays a stand-in and is never typed.
-    /// Each chip has dismiss — correctness, not convenience (§4.9 accidental attachment).
+    /// Chips are `ComposerChips`, shared with the window's composer (slice 10).
     private var chips: some View {
-        WrapLayout(spacing: 6, lineSpacing: 6) {
-            ForEach(Array(store.draft.attachments.enumerated()), id: \.element.id) { index, att in
-                HStack(spacing: 5) {
-                    Text(att.chipLabel).font(.callout).lineLimit(1)
-                    Button {
-                        store.removeAttachment(at: index)
-                    } label: {
-                        Image(systemName: "xmark")
-                            .font(.caption2.weight(.semibold))
-                            .contentShape(.rect)
-                    }
-                    .buttonStyle(.plain)
-                }
-                .foregroundStyle(Color.accentColor)
-                .padding(.horizontal, 9)
-                .frame(height: Self.chipHeight)
-                .background(Color.accentColor.opacity(0.12), in: .capsule)
-            }
+        ComposerChips(attachments: store.draft.attachments) {
+            store.removeAttachment(at: $0)
         }
     }
 
@@ -508,19 +470,21 @@ struct OverlayView: View {
     /// is the system's, so no custom rows, checkmarks, or material here. The
     /// chevron is static — a `Menu` exposes no open state to mirror.
     ///
-    /// `recents` is cached and refreshed on appear, on every show, and after
-    /// send rather than read in the menu content: body re-evaluates on every
-    /// keystroke, and `recentChats` parses every `chat.md` on disk each call.
+    /// The list reads `ChatLibrary` — cached rows, so a menu built per body
+    /// evaluation costs a sort, not a disk parse. The window's sidebar edits
+    /// the same list (slice 10), and the two stay one view of one store
+    /// through `.chatsDidChange`.
     private var chatControl: some View {
         Menu {
             Button("New chat") { store.setTarget(.new) }
             Divider()
+            let recents = Array(ChatLibrary.shared.visible.prefix(8))
             if recents.isEmpty {
                 Button("No recent chats") {}
                     .disabled(true)
             } else {
                 ForEach(recents) { chat in
-                    Button(chat.title ?? chat.slug) {
+                    Button(chat.title) {
                         store.setTarget(.existing(slug: chat.slug))
                     }
                 }
@@ -587,24 +551,57 @@ struct OverlayView: View {
         return false
     }
 
-    /// Commits draft to a chat folder — attachments serialize before text (§5.2).
+    /// Commits the draft through the live layer and starts generation.
+    /// Attachments serialize before text (§5.2); the images reach the chat's
+    /// folder before the markdown that names them.
+    ///
+    /// **The session is the single writer to `chat.md`.** The pre-slice-10
+    /// send did its own read-modify-write, which would clobber an in-flight
+    /// session's save — a real hazard once the main window generates in the
+    /// same chat. `commitAndGenerate` returns nil only on a failed commit;
+    /// the failure waits on the conversation's own surface (§14.3), which is
+    /// the "later question" the old log-only path deferred.
     private func send() {
-        let trimmed = store.draft.serializedMessage.trimmingCharacters(in: .whitespacesAndNewlines)
+        let content = store.draft.serializedContent()
+        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        // Resolve model — current chat model if available, else apple-foundation.
+        let images = store.draft.imageAttachments()
         let modelID = UserDefaults.standard.string(forKey: "ChatModelID") ?? "apple-foundation"
-        do {
-            _ = try store.send(modelID: modelID)
-            expanded = false
-            recents = store.recentChats(limit: 8)
-            conversationReload += 1
-        } catch {
-            // Empty is guarded above, so a throw here is a real disk failure:
-            // the chat folder was not written and the draft is untouched, but
-            // the user saw nothing happen. Logged for diagnosis; a user-visible
-            // error surface for send failures is a later question.
-            DraftStore.log.error("Send failed: \(error.localizedDescription, privacy: .public)")
+
+        let conversations = ChatConversations.shared
+        let conversation: ChatConversation
+        switch store.draft.target {
+        case .new:
+            conversation = conversations.beginNew()
+        case .existing(let target):
+            guard let open = conversations.open(slug: target) else {
+                DraftStore.log.error("Send target missing on disk: \(target, privacy: .public)")
+                return
+            }
+            conversation = open
         }
+
+        guard let slug = conversation.commitAndGenerate(content: content, images: images, modelID: modelID) else {
+            return
+        }
+        store.recordSend(slug: slug)
+        // **A send retargets the draft onto the chat it just made.** The bare
+        // bar cleared back to `.new`, so the surface stayed in Frame 3 with the
+        // reply streaming into a conversation the user could not see — the
+        // send read as going nowhere. Docking is a property of the target
+        // (`isDocked`), so naming the new slug is the whole switch: the body
+        // swaps to `dockedPanel`, `onChange(of:target)` moves the window right,
+        // and the streaming turn renders from the same live conversation the
+        // window shows. An existing target already stayed put and keeps doing so
+        // — one assignment covers both, so the branch goes.
+        store.draft = Draft(target: .existing(slug: slug))
+        expanded = false
+        conversationReload += 1
+    }
+
+    /// §10.4 priority 3's surface route: the send control stops what it sent.
+    private func stop() {
+        liveConversation?.stop()
     }
 }
 

@@ -341,3 +341,100 @@ struct ComposerField: NSViewRepresentable {
         }
     }
 }
+
+// MARK: - Shared composer controls
+
+/// Attachment chips, wrapping above the field and counting toward the
+/// composer's height (§5.8). Accent is on the chips and the caret and nowhere
+/// else, per Frame 1's caption. Each chip has dismiss — correctness, not
+/// convenience (§4.9 accidental attachment).
+struct ComposerChips: View {
+    let attachments: [Draft.Attachment]
+    let remove: (Int) -> Void
+
+    var body: some View {
+        WrapLayout(spacing: 6, lineSpacing: 6) {
+            ForEach(Array(attachments.enumerated()), id: \.element.id) { index, att in
+                HStack(spacing: 5) {
+                    Text(att.chipLabel).font(.callout).lineLimit(1)
+                    Button {
+                        remove(index)
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.caption2.weight(.semibold))
+                            .contentShape(.rect)
+                    }
+                    .buttonStyle(.plain)
+                }
+                .foregroundStyle(Color.accentColor)
+                .padding(.horizontal, 9)
+                .frame(height: 27)
+                .background(Color.accentColor.opacity(0.12), in: .capsule)
+            }
+        }
+    }
+}
+
+/// The compose bar's send control — one implementation for both surfaces
+/// (the overlay drew it; slice 10's window pane rides along). 12 % ink behind
+/// an 80 % ink glyph, still colourless (Anthony, 2026-09-01, `DECISIONS.md`).
+/// While the conversation generates, the glyph becomes stop and the same
+/// control fires it.
+struct ComposerSendButton: View {
+    static let control: CGFloat = 26
+
+    var isGenerating = false
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: isGenerating ? "stop.fill" : "arrow.up")
+                // `.callout` is 12 pt — the HUD's own precedent for reaching a
+                // size through a named style (`DECISIONS.md`, 2026-08-18).
+                .font(.callout.weight(.medium))
+                .foregroundStyle(.primary.opacity(0.8))
+                .frame(width: Self.control, height: Self.control)
+                .background(.primary.opacity(0.12), in: .circle)
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+/// §5.8's add-context menu — file, screenshot — one implementation for both
+/// surfaces. **Paste path is Cmd+V (ComposerField.handleImagePaste). No
+/// generic image button.** Screenshot capture is feasible via
+/// CGWindowList/ScreenCaptureKit but deferred — shown disabled per gate
+/// preference (requires Screen Recording, don't prompt). Attach Selection is
+/// deliberately absent: a selection reaches the draft through the §4.9
+/// dictation flow, not the menu (Anthony, 2026-09-01).
+struct ComposerAddMenu: View {
+    static let control: CGFloat = 26
+
+    let onAddFile: () -> Void
+    var hasAttachments: Bool = false
+    let onClear: () -> Void
+
+    var body: some View {
+        Menu {
+            Button("Add File…") { onAddFile() }
+            // Feasible via CGWindowList / ScreenCaptureKit (requires Screen
+            // Recording). Shown disabled until capture ships — no prompt now.
+            Button("Screenshot of Last Focused Window") {}
+                .disabled(true)
+            if hasAttachments {
+                Divider()
+                Button("Clear All", role: .destructive) { onClear() }
+            }
+        } label: {
+            Image(systemName: "plus")
+                // Same style as the field it sits beside, so the glyph tracks the
+                // text rather than a number: `.title3` is 15 pt.
+                .font(.title3)
+                .foregroundStyle(.secondary)
+                .frame(width: Self.control, height: Self.control)
+                .contentShape(.rect)
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+    }
+}

@@ -229,6 +229,24 @@ struct ChatSerializerTests {
         #expect(parsed.messages[0].content == content)
     }
 
+    /// §9.1's flag, added in slice 10 — frontmatter carries it only when set,
+    /// so every chat written before this slice still parses (`pinned` defaults
+    /// false).
+    @Test func roundtripsThePinnedFlag() throws {
+        var pinned = state([ChatMessage(role: .user, content: "Keep me")])
+        pinned.pinned = true
+        let markdown = ChatSerializer.serialize(state: pinned)
+        #expect(markdown.contains("pinned: true"))
+
+        let parsed = try ChatSerializer.deserialize(markdown: markdown, defaultSlug: "test-chat")
+        #expect(parsed.pinned == true)
+
+        let unpinnedMarkdown = ChatSerializer.serialize(state: state([ChatMessage(role: .user, content: "Plain")]))
+        #expect(!unpinnedMarkdown.contains("pinned"))
+        let unpinnedParsed = try ChatSerializer.deserialize(markdown: unpinnedMarkdown, defaultSlug: "test-chat")
+        #expect(unpinnedParsed.pinned == false)
+    }
+
     @Test func survivesAHandEditedHeading() throws {
         let markdown = ChatSerializer.serialize(state: state([
             ChatMessage(role: .assistant, content: "Body.", model: "m")
@@ -811,5 +829,224 @@ struct AppleFoundationTranslationTests {
          "required":["location"]}
         """)
         _ = try BridgedTool.schema(name: "no_args", jsonSchema: "{}")
+    }
+}
+
+// MARK: - Chat library — pure ordering/search, plus the one disk-touching write
+
+struct ChatLibraryTests {
+
+    private func chat(_ title: String, updated: Date, pinned: Bool = false, body: String = "") -> ChatLibrary.Chat {
+        let state = ChatSessionState(
+            slug: title.lowercased(),
+            title: title,
+            updated: updated,
+            pinned: pinned,
+            messages: body.isEmpty ? [] : [ChatMessage(role: .user, content: body)]
+        )
+        return ChatLibrary.Chat(state: state, folder: URL(fileURLWithPath: "/tmp/\(title)"))
+    }
+
+    @Test func pinnedChatsSortBeforeUnpinnedRegardlessOfDate() {
+        let old = chat("Old pinned", updated: Date(timeIntervalSince1970: 0), pinned: true)
+        let new = chat("New", updated: Date(timeIntervalSince1970: 1000))
+        let ordered = ChatLibrary.ordered([new, old], matching: "")
+        #expect(ordered.map(\.title) == ["Old pinned", "New"])
+    }
+
+    @Test func withinTheSameTierNewestSortsFirst() {
+        let earlier = chat("Earlier", updated: Date(timeIntervalSince1970: 0))
+        let later = chat("Later", updated: Date(timeIntervalSince1970: 1000))
+        let ordered = ChatLibrary.ordered([earlier, later], matching: "")
+        #expect(ordered.map(\.title) == ["Later", "Earlier"])
+    }
+
+    @Test func searchMatchesTitleOrAnyMessageBody() {
+        let byTitle = chat("Weekend plans", updated: Date())
+        let byBody = chat("Untitled", updated: Date(), body: "let's talk about kayaking")
+        let neither = chat("Taxes", updated: Date(), body: "receipts")
+
+        let matched = ChatLibrary.ordered([byTitle, byBody, neither], matching: "kayak")
+        #expect(Set(matched.map(\.title)) == ["Untitled"])
+
+        let matchedTitle = ChatLibrary.ordered([byTitle, byBody, neither], matching: "weekend")
+        #expect(Set(matchedTitle.map(\.title)) == ["Weekend plans"])
+    }
+
+    @MainActor
+    @Test func deleteRemovesTheFolderAndClearsAMatchingSelection() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("sotto-chatlib-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let state = ChatSessionState(slug: "to-delete", messages: [ChatMessage(role: .user, content: "hi")])
+        let folder = try ChatFolder.write(slug: "to-delete", markdown: ChatSerializer.serialize(state: state), to: root)
+        let chat = ChatLibrary.Chat(state: state, folder: folder)
+
+        let library = ChatLibrary.shared
+        library.selection = chat.id
+        library.delete(chat)
+
+        #expect(!FileManager.default.fileExists(atPath: folder.path))
+        #expect(library.selection == nil)
+    }
+}
+
+// MARK: - Chat conversation — hydration, streamed attribution, cancellation
+
+/// Yields tokens with a delay between each, so a test can cancel mid-stream and
+/// observe what survives — `ScriptedBackend` finishes before a cancel could ever
+/// land.
+private struct SlowScriptedBackend: ChatBackend {
+    let id: String
+    let backendType: BackendType = .openAI
+    let tokens: [String]
+    let delayNanoseconds: UInt64
+
+    func generateStream(
+        messages: [ChatMessage],
+        tools: [ChatTool],
+        systemPrompt: String?
+    ) async throws -> AsyncThrowingStream<ChatStreamEvent, Error> {
+        let tokens = self.tokens
+        let delay = self.delayNanoseconds
+        let id = self.id
+        return AsyncThrowingStream(ChatStreamEvent.self) { continuation in
+            let task = Task {
+                for token in tokens {
+                    try Task.checkCancellation()
+                    try await Task.sleep(nanoseconds: delay)
+                    continuation.yield(.token(token))
+                }
+                continuation.yield(.turnCompleted(model: id, finishReason: "stop"))
+                continuation.finish()
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+}
+
+@MainActor
+@Suite(.serialized)
+struct ChatConversationTests {
+
+    /// `commitAndGenerate` and `stop()` both spawn work on `Task`s the test has
+    /// no handle to — poll rather than assume a fixed delay finishes it.
+    private func waitUntil(timeout: TimeInterval = 2, _ condition: () -> Bool) async {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !condition() && Date() < deadline {
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
+    }
+
+    private func withScratchRoot(_ body: () async throws -> Void) async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("sotto-chatconv-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        ChatFolder.rootForTesting = root
+        defer {
+            ChatFolder.rootForTesting = nil
+            try? FileManager.default.removeItem(at: root)
+        }
+        try await body()
+    }
+
+    @Test func hydratesAnOldChatAndAppendsTheContinuation() async throws {
+        try await withScratchRoot {
+            let backend = ScriptedBackend(id: "hydrate-model", text: "Still here.")
+            ChatEngine.shared.registerBackend(backend)
+
+            let existing = ChatSessionState(
+                slug: "already-going",
+                messages: [
+                    ChatMessage(role: .user, content: "First question", model: "hydrate-model"),
+                    ChatMessage(role: .assistant, content: "First answer", model: "hydrate-model")
+                ]
+            )
+            _ = try ChatFolder.write(
+                slug: existing.slug, markdown: ChatSerializer.serialize(state: existing), to: ChatFolder.root
+            )
+
+            let conversation = ChatConversations.shared.open(ChatLibrary.Chat(
+                state: existing, folder: ChatFolder.root.appendingPathComponent(existing.slug)
+            ))
+            defer { ChatConversations.shared.discard(conversation.id) }
+
+            #expect(conversation.turns.count == 2)
+            conversation.commitAndGenerate(content: "Second question", images: [:], modelID: "hydrate-model")
+            await waitUntil { !conversation.isGenerating }
+
+            #expect(conversation.turns.count == 4)
+            #expect(conversation.turns.last?.text == "Still here.")
+        }
+    }
+
+    @Test func sendAttributesTheStreamedReplyToItsModel() async throws {
+        try await withScratchRoot {
+            let backend = ScriptedBackend(id: "attributed-model", text: "The answer.")
+            ChatEngine.shared.registerBackend(backend)
+
+            let conversation = ChatConversations.shared.beginNew()
+            defer { ChatConversations.shared.discard(conversation.id) }
+
+            conversation.commitAndGenerate(content: "A question", images: [:], modelID: "attributed-model")
+            await waitUntil { !conversation.isGenerating }
+
+            let reply = try #require(conversation.turns.last)
+            #expect(reply.text == "The answer.")
+            #expect(reply.model == "attributed-model")
+        }
+    }
+
+    @Test func cancelKeepsThePartialTextAndCommitsNoAssistantTurn() async throws {
+        try await withScratchRoot {
+            let backend = SlowScriptedBackend(
+                id: "slow-model", tokens: ["One ", "Two ", "Three "], delayNanoseconds: 100_000_000
+            )
+            ChatEngine.shared.registerBackend(backend)
+
+            let conversation = ChatConversations.shared.beginNew()
+            defer { ChatConversations.shared.discard(conversation.id) }
+
+            conversation.commitAndGenerate(content: "Count for me", images: [:], modelID: "slow-model")
+            await waitUntil(timeout: 1) { !conversation.streamingText.isEmpty }
+            #expect(!conversation.streamingText.isEmpty)
+
+            conversation.stop()
+            await waitUntil { !conversation.isGenerating }
+
+            #expect(!conversation.streamingText.isEmpty)
+            #expect(!conversation.turns.contains { !$0.isUser })
+        }
+    }
+}
+
+// MARK: - ConversationTurn parsing
+
+/// `ConversationTurn.from` is the read side of the chat file format — the exact
+/// inverse of `Draft.serializedContent()`. Slice 10 renders both the window and
+/// the docked panel through it, so drift between the writer and this parser
+/// drops a quoted selection or an attached image with no error anywhere.
+@MainActor
+struct ConversationTurnParseTests {
+    @Test func splitsAUserMessageBackIntoSourcesImagesAndText() throws {
+        let png = Data([0x89, 0x50, 0x4E, 0x47])
+        let draft = Draft(text: "what changed here?", attachments: [
+            .selection(id: UUID(), app: "Xcode", text: "let x = 1"),
+            .image(id: UUID(), filename: "shot.png", data: png),
+        ])
+        let message = ChatMessage(role: .user, content: draft.serializedContent())
+
+        let turn = try #require(ConversationTurn.from(message))
+        #expect(turn.isUser)
+        #expect(turn.sources.count == 1)
+        #expect(turn.sources.first?.app == "Xcode")
+        #expect(turn.sources.first?.text == "let x = 1")
+        #expect(turn.images == ["shot.png"])
+        #expect(turn.text == "what changed here?")
+    }
+
+    @Test func returnsNilForASystemMessage() {
+        let message = ChatMessage(role: .system, content: "You are a helpful assistant.")
+        #expect(ConversationTurn.from(message) == nil)
     }
 }

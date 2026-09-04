@@ -11,6 +11,10 @@ actor ChatSession {
     private(set) var modelsUsed: [String] = []
     private(set) var created: Date
     private(set) var updated: Date
+    /// §9.1's pin flag. Lives on the session because the session rewrites
+    /// `chat.md` on every save — a pin held only in the library would be
+    /// reverted by the next turn's save.
+    private(set) var pinned: Bool
     var contextSize: Int = 4096
     var systemPrompt: String?
 
@@ -25,6 +29,9 @@ actor ChatSession {
         title: String? = nil,
         activeModelId: String = "apple-foundation",
         initialMessages: [ChatMessage] = [],
+        created: Date = Date(),
+        modelsUsed: [String]? = nil,
+        pinned: Bool = false,
         storageRoot: URL? = nil
     ) {
         let sid = id
@@ -32,9 +39,10 @@ actor ChatSession {
         self.slug = slug ?? "chat-\(sid.uuidString.prefix(8).lowercased())"
         self.title = title
         self.activeModelId = activeModelId
-        self.modelsUsed = [activeModelId]
+        self.modelsUsed = modelsUsed ?? [activeModelId]
         self.messages = initialMessages
-        self.created = Date()
+        self.created = created
+        self.pinned = pinned
         self.updated = Date()
         self.storageRoot = storageRoot
     }
@@ -48,6 +56,11 @@ actor ChatSession {
         }
         self.updated = Date()
         log.notice("Switched model to \(newModelId, privacy: .public)")
+    }
+
+    func setPinned(_ pinned: Bool) {
+        self.pinned = pinned
+        log.notice("Chat \(self.slug, privacy: .public) pinned \(pinned)")
     }
 
     /// Register a tool with its execution handler for this conversation.
@@ -155,6 +168,7 @@ actor ChatSession {
             updated: updated,
             contextSize: contextSize,
             models: modelsUsed,
+            pinned: pinned,
             messages: messages
         )
     }

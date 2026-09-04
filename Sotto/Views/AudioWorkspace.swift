@@ -48,7 +48,8 @@ struct AudioSidebar: View {
         .disabled(true)
         .help("File transcription arrives in a later build.")
         .padding(.horizontal)
-        .padding(.bottom, 8)
+        // Matches `ChatSidebar.newChat` — one control in two modes (§10.2).
+        .padding(.bottom, 14)
     }
 
     private var list: some View {
@@ -181,6 +182,13 @@ struct AudioDetail: View {
                 }
             }
         }
+        .navigationTitle(library.selected?.title ?? "Audio")
+        .navigationSubtitle(subtitle)
+        .toolbar {
+            if let recording = library.selected {
+                ToolbarItem(placement: .primaryAction) { pinButton(recording) }
+            }
+        }
         .onChange(of: library.selection, initial: true) {
             if let recording = library.selected {
                 playback.load(recording)
@@ -194,9 +202,18 @@ struct AudioDetail: View {
 
     private func content(_ recording: AudioLibrary.Recording) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            header(recording)
+            if !recording.languages.isEmpty {
+                // The detected-language badges lived under the in-content
+                // title; the title moved to the window bar (Slice 10) and
+                // `.navigationSubtitle` is text only, so the badges stay here
+                // as a thin row above the transport.
+                HStack(spacing: 4) {
+                    ForEach(recording.languages, id: \.self) { LanguageBadge(code: $0) }
+                }
+                .padding([.horizontal, .top])
+            }
             PlaybackBar(recording: recording)
-                .padding(.horizontal)
+                .padding([.horizontal, .top])
                 .padding(.bottom)
             Divider()
             transcriptControls(recording)
@@ -213,39 +230,23 @@ struct AudioDetail: View {
         }
     }
 
-    /// The pin is a layout sibling of the title, not an overlay. An overlay
-    /// reserves no width, so a long title drew straight under it as soon as the
-    /// sidebar was widened (measured 2026-08-20). As siblings the title truncates
-    /// at two lines instead, which is what `lineLimit(2)` is for.
-    private func header(_ recording: AudioLibrary.Recording) -> some View {
-        HStack(alignment: .top) {
-            VStack(alignment: .leading) {
-                Text(recording.title)
-                    .font(.headline)
-                    .lineLimit(2)
+    /// The recording's timestamp and length — the window title's second line
+    /// (Slice 10). `.navigationSubtitle` is text only; the pin moved to the
+    /// toolbar and the language badges to a row in `content`.
+    private var subtitle: String {
+        guard let recording = library.selected else { return "" }
+        return "\(recording.created.formatted(date: .abbreviated, time: .shortened))  ·  \(recording.durationLabel)"
+    }
 
-                HStack {
-                    Text(recording.created.formatted(date: .abbreviated, time: .shortened))
-                    Text(recording.durationLabel).monospacedDigit()
-                    ForEach(recording.languages, id: \.self) { LanguageBadge(code: $0) }
-                }
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-
-            Button {
-                library.togglePin(recording)
-            } label: {
-                Image(systemName: recording.pinned ? "pin.fill" : "pin")
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(recording.pinned ? AnyShapeStyle(Token.Accent.primary) : AnyShapeStyle(.secondary))
-            .help(recording.pinned ? "Unpin — the ring may evict this" : "Pin — never evicted by the ring")
-            .accessibilityLabel(recording.pinned ? "Unpin recording" : "Pin recording")
+    private func pinButton(_ recording: AudioLibrary.Recording) -> some View {
+        Button {
+            library.togglePin(recording)
+        } label: {
+            Image(systemName: recording.pinned ? "pin.fill" : "pin")
         }
-        .padding([.horizontal, .top])
-        .padding(.bottom, 8)
+        .foregroundStyle(recording.pinned ? AnyShapeStyle(Token.Accent.primary) : AnyShapeStyle(.secondary))
+        .help(recording.pinned ? "Unpin — the ring may evict this" : "Pin — never evicted by the ring")
+        .accessibilityLabel(recording.pinned ? "Unpin recording" : "Pin recording")
     }
 
     /// The system segmented control, unlike the Chat/Audio pill in the sidebar.

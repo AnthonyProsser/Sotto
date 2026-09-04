@@ -47,12 +47,19 @@ nonisolated final class ChatEngine: @unchecked Sendable {
         return models
     }
 
-    /// Create a new chat session.
+    /// Create a new chat session. The optional `created`/`modelsUsed` carry a
+    /// persisted conversation back in (slice 10's restore) — rewriting a 2026
+    /// chat with today's date, or collapsing its per-turn model list to one
+    /// model, would falsify the record §9.1 keeps.
     func createSession(
         id: UUID = UUID(),
         slug: String? = nil,
         title: String? = nil,
         defaultModelId: String = "apple-foundation",
+        initialMessages: [ChatMessage] = [],
+        created: Date = Date(),
+        modelsUsed: [String]? = nil,
+        pinned: Bool = false,
         storageRoot: URL? = nil
     ) -> ChatSession {
         let session = ChatSession(
@@ -60,6 +67,10 @@ nonisolated final class ChatEngine: @unchecked Sendable {
             slug: slug,
             title: title,
             activeModelId: defaultModelId,
+            initialMessages: initialMessages,
+            created: created,
+            modelsUsed: modelsUsed,
+            pinned: pinned,
             storageRoot: storageRoot
         )
         lock.lock()
