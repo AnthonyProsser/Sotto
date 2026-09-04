@@ -167,6 +167,12 @@ final class OverlayPanel {
         // Resolve continuity target before showing (§5.3) — use B's resolver name
         // but keep A alias via DraftStore.applyContinuityIfNeeded.
         DraftStore.shared.resolveContinuityIfNeeded()
+        // Re-read by the hosted view: it refreshes its cached recent-chat list
+        // on this, so every show sees chats created while it was hidden.
+        // `onAppear` fires only for the panel's first lifetime — the panel is
+        // built once and reused, and `orderOut`/`orderFront` never re-triggers
+        // it — which is why the picker stayed empty until the first send.
+        NotificationCenter.default.post(name: .sottoOverlayDidShow, object: nil)
         previousApp = NSWorkspace.shared.frontmostApplication
 
         // **Sotto activates, and that is deliberate** (Anthony, 2026-08-27: "I
@@ -574,4 +580,12 @@ final class OverlayPanel {
             y: screen.visibleFrame.minY + Self.dockClearance
         ))
     }
+}
+
+extension Notification.Name {
+    /// Posted on main from `OverlayPanel.show()` after continuity resolves and
+    /// before the panel orders front. The hosted `OverlayView` is built once
+    /// and reused, so its `onAppear` runs a single time per process lifetime;
+    /// this is the per-show signal it refreshes its cached recent-chat list on.
+    static let sottoOverlayDidShow = Notification.Name("SottoOverlayDidShow")
 }
