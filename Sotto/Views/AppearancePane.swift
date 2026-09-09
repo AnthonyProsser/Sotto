@@ -32,6 +32,12 @@ struct AppearancePane: View {
             }
         }
         .formStyle(.grouped)
-        .settingsToolbar("Appearance")
+        // The window title, not a toolbar item: macOS 26 draws a bordered
+        // capsule around `.navigation` items — the same treatment Models
+        // dropped on 2026-09-03 (DECISIONS.md). Every settings detail names
+        // the window (and clears the subtitle) so the Chat/Audio title
+        // ("New Chat") never leaks through on section switch.
+        .navigationTitle("Appearance")
+        .navigationSubtitle("")
     }
 }

@@ -309,6 +309,12 @@ final class ModelsState {
 /// rows only — never the network — and the Lab/Size/Name sort), a Downloaded
 /// section carrying built-ins, on-disk models, and anything mid-download, and
 /// an Available section grouped by lab with the Add row at its foot.
+///
+/// Built from the native grouped-form controls rather than custom chrome
+/// (`rules/design.md` §1 — redrawing system settings chrome is the failure):
+/// `Form` + `.formStyle(.grouped)` is macOS's own System-Settings styling, the
+/// same treatment `AppearancePane` wears, so the two pages share one backdrop,
+/// one card fill, and one separator treatment in every appearance.
 struct ModelsPane: View {
     @Bindable private var models = ModelsState.shared
 
@@ -327,13 +333,11 @@ struct ModelsPane: View {
     }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
-                downloadedSection
-                availableSection
-            }
-            .padding()
+        Form {
+            downloadedSection
+            availableSection
         }
+        .formStyle(.grouped)
         .task { models.reload() }
         // The window title, not a toolbar item: macOS 26 draws a bordered
         // capsule around `.navigation` items, and with no `navigationTitle` set
@@ -369,7 +373,15 @@ struct ModelsPane: View {
     @ViewBuilder
     private var downloadedSection: some View {
         if !downloadedItems.isEmpty {
-            VStack(alignment: .leading, spacing: 8) {
+            Section {
+                ForEach(downloadedItems) { item in
+                    switch item {
+                    case .builtIn(let model): builtInRow(model)
+                    case .local(let model): localRow(model)
+                    case .downloading(let candidate): downloadingRow(candidate)
+                    }
+                }
+            } header: {
                 HStack(alignment: .firstTextBaseline) {
                     Text("Downloaded").font(.headline)
                     Spacer()
@@ -377,38 +389,35 @@ struct ModelsPane: View {
                         .font(.footnote)
                         .foregroundStyle(.tertiary)
                 }
-                container {
-                    rows(downloadedItems) { item in
-                        switch item {
-                        case .builtIn(let model): builtInRow(model)
-                        case .local(let model): localRow(model)
-                        case .downloading(let candidate): downloadingRow(candidate)
-                        }
-                    }
-                }
             }
         }
     }
 
     @ViewBuilder
     private var availableSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .firstTextBaseline) {
-                Text("Available").font(.headline)
-                Spacer()
-                Text("Percentages are of this Mac's \(ramSummary) of memory")
-                    .font(.footnote)
-                    .foregroundStyle(.tertiary)
-            }
-            container {
-                rows(availableItems) { item in
-                    switch item {
-                    case .header(let lab, let count): groupHeader(lab, count: count)
-                    case .row(let row): availableRow(row)
+        ForEach(Array(availableGroups.enumerated()), id: \.offset) { index, group in
+            Section {
+                ForEach(group.rows) { row in
+                    availableRow(row)
+                }
+                if index == availableGroups.count - 1 {
+                    addRow
+                }
+            } header: {
+                VStack(alignment: .leading, spacing: 6) {
+                    if index == 0 {
+                        HStack(alignment: .firstTextBaseline) {
+                            Text("Available").font(.headline)
+                            Spacer()
+                            Text("Percentages are of this Mac's \(ramSummary) of memory")
+                                .font(.footnote)
+                                .foregroundStyle(.tertiary)
+                        }
+                    }
+                    if let lab = group.lab {
+                        groupHeader(lab, count: group.rows.count)
                     }
                 }
-                if !availableItems.isEmpty { Divider().padding(.leading, 52) }
-                addRow
             }
         }
     }
@@ -421,21 +430,6 @@ struct ModelsPane: View {
 
     private var ramSummary: String {
         ByteCountFormatter.string(fromByteCount: Int64(ProcessInfo.processInfo.physicalMemory), countStyle: .memory)
-    }
-
-    /// One container, hairline-divided rows. The 52 pt inset walks the divider
-    /// past the badge, the way an inset grouped list indents its separators.
-    private func container(@ViewBuilder content: () -> some View) -> some View {
-        VStack(spacing: 0, content: content)
-            .background(.quaternary)
-            .clipShape(.rect(cornerRadius: 10, style: .continuous))
-    }
-
-    private func rows<Item: Identifiable>(_ items: [Item], @ViewBuilder row: @escaping (Item) -> some View) -> some View {
-        ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
-            if index > 0 { Divider().padding(.leading, 52) }
-            row(item)
-        }
     }
 
     // MARK: Downloaded rows
@@ -487,8 +481,6 @@ struct ModelsPane: View {
                 .help("Comes with your Mac — can't be removed")
                 .frame(width: 28)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
         .foregroundStyle(.secondary)
         .help(model.note)
     }
@@ -511,8 +503,6 @@ struct ModelsPane: View {
             deleteCell(model)
                 .frame(width: 28)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
     }
 
     /// A download in progress lives in Downloaded, as the render draws it.
@@ -543,8 +533,6 @@ struct ModelsPane: View {
             .help("Cancel download")
             .frame(width: 28)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
     }
 
     /// Click turns the cell into the confirm pair; nothing is removed until
@@ -593,19 +581,14 @@ struct ModelsPane: View {
         let source: Source
     }
 
-    private enum AvailableItem: Identifiable {
-        case header(lab: String, count: Int)
-        case row(AvailableRow)
-
-        var id: String {
-            switch self {
-            case .header(let lab, _): "header-\(lab)"
-            case .row(let row): row.id
-            }
-        }
+    private struct AvailableGroup {
+        /// The lab this section groups, or nil for the ungrouped Size/Name
+        /// orderings (and for the empty state, which still shows Add).
+        let lab: String?
+        let rows: [AvailableRow]
     }
 
-    private var availableItems: [AvailableItem] {
+    private var availableGroups: [AvailableGroup] {
         var all: [AvailableRow] = []
 
         let onDiskIDs = Set(models.onDisk.map(\.id))
@@ -646,17 +629,15 @@ struct ModelsPane: View {
 
         switch sort {
         case .lab:
-            var items: [AvailableItem] = []
-            for lab in Set(all.map(\.lab)).sorted() {
-                let group = all.filter { $0.lab == lab }.sorted(by: sizeOrder)
-                items.append(.header(lab: lab, count: group.count))
-                items.append(contentsOf: group.map { .row($0) })
+            let groups = Set(all.map(\.lab)).sorted().map { lab in
+                AvailableGroup(lab: lab, rows: all.filter { $0.lab == lab }.sorted(by: sizeOrder))
             }
-            return items
+            // Lab sort with nothing listed still shows the section and its Add row.
+            return groups.isEmpty ? [AvailableGroup(lab: nil, rows: [])] : groups
         case .size:
-            return all.sorted(by: sizeOrder).map { .row($0) }
+            return [AvailableGroup(lab: nil, rows: all.sorted(by: sizeOrder))]
         case .name:
-            return all.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }.map { .row($0) }
+            return [AvailableGroup(lab: nil, rows: all.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending })]
         }
     }
 
@@ -688,8 +669,6 @@ struct ModelsPane: View {
             control(for: row)
                 .frame(width: 28)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
     }
 
     private func groupHeader(_ lab: String, count: Int) -> some View {
@@ -701,8 +680,6 @@ struct ModelsPane: View {
                 .font(.caption)
                 .foregroundStyle(.tertiary)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
@@ -762,8 +739,6 @@ struct ModelsPane: View {
                 Button("Cancel") { showingPasteField = false }
                     .controlSize(.small)
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
         } else {
             HStack(spacing: 12) {
                 Image(systemName: "plus.circle")
@@ -777,8 +752,6 @@ struct ModelsPane: View {
                 Spacer(minLength: 12)
                 Button("Add…") { showingPasteField = true }
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
             .contentShape(.rect)
             .onTapGesture { showingPasteField = true }
         }
