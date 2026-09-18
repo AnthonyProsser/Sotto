@@ -1,6 +1,8 @@
 # Sotto — instructions for Claude Code
 
-Menu-bar macOS app: system-wide dictation plus an overlay chat, both entirely on-device. Swift / AppKit, macOS 26 floor, Apple silicon only. Author: Anthony Prosser. Open source intent.
+Menu-bar macOS app: system-wide dictation, entirely on-device. Swift / AppKit, macOS 26 floor, Apple silicon only. Author: Anthony Prosser. Open source intent.
+
+**The overlay chat, the model-management layer, and MCP were deleted on 2026-09-18** (`DECISIONS.md`). macOS 27's Siri panel covers that use case and is already on every machine. Large parts of `docs/` and of these rule files still describe them — where they do, they are describing a Sotto that no longer exists, and §3 is where the tripwire lives.
 
 **This file is the always-on layer, and it is deliberately short.** What it holds applies to every session and every kind of work in this repo. Everything that applies to *one* kind of work — drawing, the event tap, transcription, models and network, working a slice — lives in `.claude/rules/`, and **§0.1 says which file to open when.**
 
@@ -188,16 +190,16 @@ Five things that hold no matter what you are touching.
 
 **Platform floor: macOS 26, Apple silicon only, Swift / AppKit.** The floor is genuine — macOS 14 and 15 cannot run Sotto, because Liquid Glass, continuous corners, and concentric radii come from real system APIs rather than `NSVisualEffectView` approximations. It also fixes which SF Symbols and materials exist, so it is upstream of every decision in spec §14.
 
-**Principle 1 is a consent rule, not a count.** Every outbound connection is either something the user just did or something the user switched on. Three exist: a model download, an enabled MCP server, the weekly update check. **That test is what permanently rules out telemetry, crash reporting, analytics, and remote config** — not a list, but the fact that nobody asks for them, so they can never pass. Anything that would connect without the user having done something or turned something on does not get built. Mechanics in `rules/models-and-network.md` §2.
+**Principle 1 is a consent rule, not a count.** Every outbound connection is either something the user just did or something the user switched on. **One now exists: the weekly update check.** The model download and the MCP server went with the chat layer on 2026-09-18 — which is the consent rule working as designed rather than being relaxed, because a connection with nothing left to consent to is a connection that does not get made. **That test is what permanently rules out telemetry, crash reporting, analytics, and remote config** — not a list, but the fact that nobody asks for them, so they can never pass. Anything that would connect without the user having done something or turned something on does not get built. Mechanics in `rules/models-and-network.md` §2.
 
 **Nothing is a notification and nothing is modal.** Sotto has no Notifications permission and does not acquire one. An error firing with no surface on screen is not a case that exists — every failure belongs to a pipeline the user started from a surface, and that surface is where it waits. Routing table in `rules/design.md` §10.
 
 **Predict, don't gate.** Hardware never gates a feature; it produces an estimate and an amber row. The one exception is model capability, and it gates on the model, not the machine. Detail in `rules/models-and-network.md` §1.
 
-**Three things are undecided, and inventing an answer to one produces something that looks settled and is not.** Ask. The names are here rather than behind the pointer because the failure is answering a question you did not know existed — a pointer only helps a reader who already suspects. Reasoning in `rules/open-questions.md`; which slice hits which in `rules/slices.md` §4.
+**Two things are undecided, and inventing an answer to one produces something that looks settled and is not.** Ask. The names are here rather than behind the pointer because the failure is answering a question you did not know existed — a pointer only helps a reader who already suspects. Reasoning in `rules/open-questions.md`; which slice hits which in `rules/slices.md` §4.
 
 > Gap **2**, the **HUD's** anchor number — its form is settled (a constant distance from the top of `NSScreen.frame`), the number is not. The overlay's half closed 2026-08-26.
-> Issues: **1** MCP Swift SDK vs. protocol version · **4** cleanup reasoning toggle and default.
+> Issues: **4** cleanup reasoning toggle and default. **Issue 1**, the MCP Swift SDK vs. the protocol version, is **moot as of 2026-09-18** — there is no MCP.
 > Numbers track spec §12 and never get renumbered. **Closed and staying closed:** issue 2, the SwiftUI/AppKit split (2026-08-15); gap 1, the chat's shape (2026-08-27); gap 3, the send button (2026-08-27); issue 3, focus change mid-transcription (2026-08-27); issue 5, bare compose bar growth (2026-08-27). All in `DECISIONS.md`.
 
 ---
@@ -208,8 +210,9 @@ Each of these was in the spec and was cut. **A model trained on older context wi
 
 | Cut | Reason lives in |
 |---|---|
+| **The whole chat layer — the overlay panel, the in-window Chat mode, chat history, model downloads and the model list, the memory estimator, the MLX and OpenAI-compatible backends, MCP.** Cut 2026-09-18, and this is the row most likely to be re-suggested, because `docs/` still argues for all of it at length | `DECISIONS.md`, 2026-09-18 |
 | Live transcript layer in the HUD · live-streaming insertion · sentence-following playback highlight · Binoculars AI-detection | `rules/audio-and-transcription.md` §4 |
-| `state.recording` / `state.latched` · `state.error` / `state.network` and the whole `state.*` namespace · tier 3 · the theme struct · network badge on MCP features · model selector in the compose bar · HUD waveform on/off — **and the Appearance tab, but that one came back 2026-09-03 for a single control (the docked-overlay panel surface); no theme, no light/dark, `DECISIONS.md`** | `rules/design.md` §12 |
+| `state.recording` / `state.latched` · `state.error` / `state.network` and the whole `state.*` namespace · tier 3 · the theme struct · network badge on MCP features · model selector in the compose bar · HUD waveform on/off · **the Appearance tab** — it came back 2026-09-03 for one control, the docked-overlay panel surface, and went out again with the overlay on 2026-09-18 | `rules/design.md` §12 |
 | CGEvent Unicode insertion strategy | `rules/input-and-insertion.md` §2 |
 | Three bundled search MCPs (SearXNG, DuckDuckGo, BYO-key) | `rules/models-and-network.md` §3 |
 
@@ -221,15 +224,15 @@ Also gone: the Out-of-scope section, insert-mode in profiles, and the zero-outbo
 
 | | |
 |---|---|
-| Gestures | Hold or double-tap **Right Cmd** → dictate (routes to chat if text is selected). Double-tap **Option** → overlay |
-| STT | Apple `SpeechAnalyzer` / `SpeechTranscriber`, **the only v1 backend**; `DictationTranscriber` past its 30 locales. Runs on the ANE, **shared with the LLM** |
-| LLM | Apple `SystemLanguageModel` by default; `mlx-swift` embedded; OpenAI-compatible adapter for Ollama `:11434`, `llama-server`, LM Studio |
+| Gestures | Hold **Right Option** → push-to-talk. Double-tap **Right Option** → latched. **Both are dictation and there is no third gesture** (2026-09-18). A dictation fired with text selected replaces the selection |
+| STT | Apple `SpeechAnalyzer` / `SpeechTranscriber`, **the only v1 backend**; `DictationTranscriber` past its 30 locales. Runs on the ANE, shared with cleanup |
+| LLM | Apple `SystemLanguageModel`, for cleanup and nothing else. **No model list, no downloads, no MLX, no OpenAI-compatible adapter** (2026-09-18) |
 | VAD | `SpeechDetector`, preinstalled |
 | Reference machine | MacBook Neo, 8 GB unified memory — the development target, not a runtime floor |
-| Memory estimate | `weights + KV + ~15 % overhead`; amber past ~60 % of physical RAM; always advisory |
-| Permissions | Accessibility, Input Monitoring, Microphone at first run; **Screen Recording deferred to the first screenshot**. No Notifications, ever |
-| Storage | Chats as one folder each with `chat.md` + `attachments/`; audio as Opus @ 24 kbps (~0.18 MB/min vs WAV's ~1.9) |
-| Retention | Audio: ring of 8 by default. Chats: unlimited. Both configurable, both with a pin flag. Imports auto-pinned |
+| Memory estimate | Gone with the model list — Apple's model has no weights to estimate |
+| Permissions | Accessibility, Input Monitoring, Microphone at first run. **Screen Recording is no longer asked for at all** — the screenshot gesture was the overlay's. No Notifications, ever |
+| Storage | Audio as Opus @ 24 kbps (~0.18 MB/min vs WAV's ~1.9), one folder per recording |
+| Retention | Audio: **never delete by default** (2026-09-18) — the ring is configurable from Settings → Dictation, with a pin flag. Imports auto-pinned |
 
 ---
 

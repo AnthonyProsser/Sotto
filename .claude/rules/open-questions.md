@@ -1,6 +1,6 @@
 # Open questions — do not invent answers to these
 
-**Three things are genuinely undecided**, matching `CLAUDE.md` §2's count. If your work needs one, **ask Anthony**. Inventing an answer produces something that looks settled and is not.
+**Two things are genuinely undecided**, matching `CLAUDE.md` §2's count. **Issue 1 went moot on 2026-09-18** — there is no MCP to write a client for — and gap 1 and the overlay half of gap 2 lost their subject the same day. If your work needs one, **ask Anthony**. Inventing an answer produces something that looks settled and is not.
 
 **Four closed on 2026-08-27** — gap 1, gap 3, issue 3, issue 5 — all in `DECISIONS.md`. Their sections are struck through below rather than deleted: the reasoning is what stops each one being reopened by someone who only sees the answer.
 
@@ -20,7 +20,9 @@
 
 The SVG's turn anatomy — speaker labels, quoted selection, no assistant bubble — is separable from the wash question and survives whichever container wins. See `.claude/rules/design.md` §11.
 
-### Gap 2 — the two anchor numbers are still not constants, but the overlay's now decomposes
+### Gap 2 — the HUD's anchor number (the overlay's half is moot)
+
+**Only the HUD's number is still open. The overlay was deleted 2026-09-18, so its 118 pt offset and the Dock-clearance decomposition below govern nothing** — kept because the decomposition is the worked example of “is this a value or a rule,” which is the form the HUD's answer has to take too.
 
 `Design.pdf` quotes the overlay's **118 pt** bottom offset alongside an **84 pt Dock** and a **34 pt clearance**, each with its own ratio — 118 = 84 + 34, which is the shape of an invariant rather than a coincidence. The likely token is therefore *"clears the Dock's current height by 34 pt (0.654 bar heights),"* not the constant.
 
@@ -48,7 +50,7 @@ One layer per capsule, `Sotto/Sotto.icon`. See `DECISIONS.md`. It was an asset d
 
 ## Open issues (spec §12)
 
-1. **MCP Swift SDK lags the protocol.** `modelcontextprotocol/swift-sdk` 0.12.1 (May 2026) implements 2025-11-25; Sotto targets 2026-07-28, which removes the handshake and sessions and adds Multi Round-Trip Requests. Wait, fork, or write the client directly against the spec. **Decide before writing a line of slice 12.**
+1. ~~**MCP Swift SDK lags the protocol.**~~ **Moot 2026-09-18 — MCP was deleted with the chat layer** (`DECISIONS.md`). The argument below is kept, unstruck in its details, because it is a live question for anyone building an MCP client in Swift at all; it is no longer a question for Sotto. `modelcontextprotocol/swift-sdk` 0.12.1 (May 2026) implements 2025-11-25; Sotto targets 2026-07-28, which removes the handshake and sessions and adds Multi Round-Trip Requests. Wait, fork, or write the client directly against the spec. **Decide before writing a line of slice 12.**
 2. ~~**SwiftUI / AppKit split.**~~ **Closed 2026-08-15 — see `DECISIONS.md`.** Every view is SwiftUI, including the main window; AppKit is confined to the app delegate, the status item and its `NSMenu`, and the `NSWindow`/`NSPanel` objects hosting SwiftUI via `NSHostingView`. **Consequence: each §14.2 role has exactly one `Color` form, never a paired `NSColor`** — that pairing was the objection, and pushing the main window into SwiftUI is what removed it. The number is kept and not reused; spec §12's numbering is referenced elsewhere.
 3. ~~**Focus changes mid-transcription.**~~ **Closed 2026-08-27 — the clipboard.** Routing to the original target risks writing into a window the user has left, which is §4.5's one ruled-out failure: text arriving where nobody is looking, with no error anywhere. The clipboard is surprising when the field is still right there, and that cost is accepted because it is *visible* — the existing no-focused-field path already morphs the HUD to "Copied to clipboard" and fades. See `DECISIONS.md`.
 4. **Cleanup reasoning: toggle, and default.** May help punctuation on ambiguous prosody; multiplies latency on the step between speaking and seeing text. §8.1 currently defaults it open. Lands in slice 11.

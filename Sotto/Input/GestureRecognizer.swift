@@ -7,10 +7,10 @@
 
 import Foundation
 
-/// Everything slice 2 produces. Each is a log line today: slice 3 gives the first
-/// four bodies and slice 9 gives `overlay` one.
+/// Everything slice 2 produces. Both dictation gestures live on Right Option;
+/// there is no second key and no second surface to signal.
 enum GestureSignal: String {
-    /// Right Cmd went down and nothing is classified yet. Slice 3 opens the
+    /// Right Option went down and nothing is classified yet. Slice 3 opens the
     /// microphone speculatively on this, so that a hold that becomes a dictation
     /// already has the lead-in audio the user spoke over the 250 ms threshold.
     /// **It is not a recording** — `disarm` throws the audio away.
@@ -21,7 +21,6 @@ enum GestureSignal: String {
     case latched = "LATCHED"
     case stop = "STOP"
     case abort = "ABORT"
-    case overlay = "OVERLAY"
 }
 
 /// §4.1's state machine, and nothing else — no Core Graphics, no tap, no I/O.
@@ -39,8 +38,7 @@ final class GestureRecognizer {
     enum Disposition { case pass, swallow }
 
     enum Input {
-        case rightCommandDown, rightCommandUp
-        case rightOptionDown
+        case rightOptionDown, rightOptionUp
         case otherKeyDown(isEscape: Bool)
         case otherKeyUp
     }
@@ -59,7 +57,7 @@ final class GestureRecognizer {
 
     private enum State {
         case idle
-        /// Right Cmd is down and under the hold threshold — still unclassified.
+        /// Right Option is down and under the hold threshold — still unclassified.
         case armed
         /// Crossed the threshold with the key still down. This is the only state that
         /// consumes, and the whole of what "consumed" means.
@@ -67,8 +65,8 @@ final class GestureRecognizer {
         /// Released under the threshold; the second-tap window is open.
         case awaitingSecond
         case latched
-        /// Right Cmd down again during a latched session: a stop on release, unless a
-        /// chord arrives first and reveals it was Cmd+something.
+        /// Right Option down again during a latched session: a stop on release, unless
+        /// a chord arrives first and reveals it was Option+something.
         case latchedTap
         /// Aborted while the key is still physically down. Its release does nothing —
         /// §4.1's "the user should never have to think about how to let go."
@@ -83,16 +81,12 @@ final class GestureRecognizer {
         didSet { generation &+= 1 }
     }
 
-    private var lastRightOptionDown: TimeInterval = -.infinity
-
     func handle(_ input: Input) -> Disposition {
         switch input {
-        case .rightCommandDown:
-            return rightCommandDown()
-        case .rightCommandUp:
-            return rightCommandUp()
         case .rightOptionDown:
             return rightOptionDown()
+        case .rightOptionUp:
+            return rightOptionUp()
         case .otherKeyDown(let isEscape):
             return otherKeyDown(isEscape: isEscape)
         case .otherKeyUp:
@@ -102,12 +96,9 @@ final class GestureRecognizer {
         }
     }
 
-    // MARK: - Right Cmd
+    // MARK: - Right Option
 
-    private func rightCommandDown() -> Disposition {
-        // A Cmd tap between two Option taps means they were not a double-tap.
-        lastRightOptionDown = -.infinity
-
+    private func rightOptionDown() -> Disposition {
         switch state {
         case .idle:
             state = .armed
@@ -126,11 +117,13 @@ final class GestureRecognizer {
         }
 
         // **Never consumed here.** Consumption starts at the threshold, which is what
-        // leaves Right-Cmd+C working (DECISIONS.md, 2026-08-15).
+        // leaves Option-as-a-modifier working — Option+e and every other dead key still
+        // reach the app, because at this point the press is not yet a dictation
+        // (DECISIONS.md, 2026-08-15, carried over from Right Cmd).
         return .pass
     }
 
-    private func rightCommandUp() -> Disposition {
+    private func rightOptionUp() -> Disposition {
         switch state {
         case .armed:
             state = .awaitingSecond
@@ -153,7 +146,7 @@ final class GestureRecognizer {
         }
 
         // **Always passes**, including out of `pushToTalk`. Swallowing this one event
-        // leaves every app on the machine believing Cmd is still held, with nothing
+        // leaves every app on the machine believing Option is still held, with nothing
         // later to correct it.
         return .pass
     }
@@ -161,8 +154,6 @@ final class GestureRecognizer {
     // MARK: - Everything else
 
     private func otherKeyDown(isEscape: Bool) -> Disposition {
-        lastRightOptionDown = -.infinity
-
         if isEscape {
             switch state {
             case .armed, .pushToTalk, .latchedTap:
@@ -190,25 +181,10 @@ final class GestureRecognizer {
             // The hold owns the keyboard until it ends (DECISIONS.md, 2026-08-15).
             return .swallow
         case .latchedTap:
-            state = .latched // Cmd+something during a latched session is not a stop.
+            state = .latched // Option+something during a latched session is not a stop.
         case .idle, .latched, .spent:
             break
         }
-        return .pass
-    }
-
-    // MARK: - Right Option
-
-    private func rightOptionDown() -> Disposition {
-        let now = CFAbsoluteTimeGetCurrent()
-        if now - lastRightOptionDown <= Self.secondTapWindow {
-            lastRightOptionDown = -.infinity
-            emit(.overlay)
-        } else {
-            lastRightOptionDown = now
-        }
-        // Right Option is never consumed. The consumption rule exists because one key
-        // was doing two jobs while recording, and nothing here records.
         return .pass
     }
 

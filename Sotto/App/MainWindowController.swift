@@ -67,27 +67,25 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     func show() {
         setActivationPolicy(regular: true)
         NSApp.activate()
+        moveToActiveScreen()
         window?.makeKeyAndOrderFront(nil)
         Activity.shared.set(.mainWindow, true)
         // The window is usually closed while dictations are being recorded and
-        // evicted, so what the list last held is stale by definition. Chats can
-        // change the same way — the overlay sends into them while the window is
-        // shut.
+        // evicted, so what the list last held is stale by definition.
         AudioLibrary.shared.refresh()
-        ChatLibrary.shared.refresh()
     }
 
-    /// **History…** in the menu bar (§10.1), which is a workspace action and lands
-    /// on the Audio mode rather than wherever the window was left.
-    func show(mode: Mode) {
+    /// **History…** in the menu bar (§10.1), which is a workspace action: it leaves
+    /// settings if settings were up, because the recordings list is what the menu
+    /// item names. There is no mode to select any more — Audio is the window.
+    func showHistory() {
         state.showingSettings = false
-        state.mode = mode
         show()
     }
 
     /// `Cmd+,` and the menu's **Settings…** both land here. Opening the window when
     /// it is closed opens it *on* the settings page; toggling with it already open
-    /// returns to the mode, selection, and scroll position the user left.
+    /// returns to the selection and scroll position the user left.
     func toggleSettings() {
         if window?.isVisible == true {
             state.showingSettings.toggle()
@@ -100,6 +98,39 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     func windowWillClose(_ notification: Notification) {
         setActivationPolicy(regular: false)
         Activity.shared.set(.mainWindow, false)
+    }
+
+    /// **The window opens where the user is, not where it was closed** (Anthony,
+    /// 2026-09-18). `setFrameAutosaveName` restores the frame onto whichever
+    /// display it was last used on, which is the right default for an app you
+    /// launch and the wrong one for a menu-bar app summoned from wherever the
+    /// pointer already is — **History…** otherwise opens a window on a screen the
+    /// user is not looking at, and nothing on the screen they *are* looking at
+    /// says anything opened.
+    ///
+    /// **The mouse is the signal, not `NSScreen.main`.** `main` is the screen
+    /// holding the key window, and an `.accessory` app being asked to open its
+    /// first one has no key window to read; `NSEvent.mouseLocation` is where the
+    /// menu click or the pointer actually is. `main` stays as the fallback for a
+    /// pointer parked in the gap between two displays.
+    ///
+    /// **Nothing moves while the window is already on that screen**, so the
+    /// position the user dragged it to survives on one display and on the display
+    /// they stayed on. Crossing screens centres it, which is what `window.center()`
+    /// does on first launch — the same answer, on the screen being looked at.
+    private func moveToActiveScreen() {
+        guard let window, let target = Self.activeScreen(), window.screen !== target else { return }
+        let bounds = target.visibleFrame
+        var frame = window.frame
+        frame.size.width = min(frame.width, bounds.width)
+        frame.size.height = min(frame.height, bounds.height)
+        frame.origin = CGPoint(x: bounds.midX - frame.width / 2, y: bounds.midY - frame.height / 2)
+        window.setFrame(window.constrainFrameRect(frame, to: target), display: false)
+    }
+
+    private static func activeScreen() -> NSScreen? {
+        let mouse = NSEvent.mouseLocation
+        return NSScreen.screens.first { $0.frame.contains(mouse) } ?? NSScreen.main
     }
 
     // MARK: - The activation policy, and the overlay guard

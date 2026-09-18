@@ -32,7 +32,7 @@ Each rule below has a reason attached. The reason is load-bearing: a rule withou
 **What follows from it is a rate rule, not a ban:**
 
 - **Microphone-rate dictation may overlap Foundation Models freely.** STT at 1× realtime costs cleanup +5 % latency, inside run-to-run drift. Dictation and cleanup are sequential anyway.
-- **File and import transcription is serialised around active chat generation.** At 60× realtime it costs cleanup **+76 %** and loses **24 %** of its own throughput. Slice 14 does not run an import against a generating chat response; it waits.
+- ~~**File and import transcription is serialised around active chat generation.**~~ **Moot 2026-09-18** — nothing generates. The measurement (at 60× realtime an import costs a concurrent Foundation Models request **+76 %** latency and loses **24 %** of its own throughput) is kept, because it still describes what an import does to a cleanup pass running beside it.
 
 Bounds: one machine, no `sudo`, so this is ANE occupancy and latency rather than per-block power. ANE power-down has hysteresis, so a "powered" reading overhangs the work that caused it — use the client-count delta if you re-measure.
 
@@ -90,13 +90,15 @@ The HUD reports through the idle / not-idle signal, one of the four cross-slice 
 
 **Prewarming is never `Activity.Contributor.cleanup`.** The icon reports that Sotto is awake (§14.8); a speculative warm-up the user did not ask for is not that. Set the contributor when a pass actually runs.
 
-**Cleanup owns its own `LanguageModelSession` and never shares chat's.** Reusing one session for two simultaneous requests throws `concurrentRequests` deterministically; two distinct sessions both complete (2026-08-19, `DECISIONS.md`). **There is no parallel speedup** — the model serialises underneath — so a cleanup pass firing while a chat response generates costs roughly a full request on whichever the user is waiting for. Full numbers in `rules/models-and-network.md` §1.1.
+**Cleanup owns its own `LanguageModelSession`.** (It never shared chat's; since 2026-09-18 there is no chat session to share.) Reusing one session for two simultaneous requests throws `concurrentRequests` deterministically; two distinct sessions both complete (2026-08-19, `DECISIONS.md`). **There is no parallel speedup** — the model serialises underneath — so a cleanup pass firing while a chat response generates costs roughly a full request on whichever the user is waiting for. Full numbers in `rules/models-and-network.md` §1.1.
 
 **4096 is the whole window, prompt and output.** Confirmed at runtime, not just in the interface. Dictation is unaffected — §4.6 measures a five-minute latched session at ~1,000 tokens — but §4.6's chunked-cleanup formula for long imports computes against a much smaller number than an MLX model would give, so imports get materially more boundaries and each one is a chance to split a self-correction.
 
 **Known instruction gap, found in testing:** the model punctuates from pause markers well (240 ms → comma, 780 ms and 1120 ms → sentence breaks, verified), removes fillers, and fixes stutters — but it *preserves* self-corrections rather than resolving them, keeping "no wait, actually" instead of dropping the abandoned first choice as §4.6 asks. That is prompt wording, not a model limit. Fix it in slice 11's instructions rather than rediscovering it as a complaint.
 
-**Fill `AudioEntry.cleaned`, `.profile`, and `.languages` in this slice.** Slice 5 writes them empty so the sidecar shape is already honest. Cleanup produces `cleaned`; the active profile's name is `profile`. `languages` has no Apple equivalent of Whisper's per-segment language tokens — pick the source here, do not invent one in passing. The type lives in `Sotto/History/AudioHistory.swift`.
+**Fill `AudioEntry.cleaned` and `.profile` in this slice.** Slice 5 writes them empty so the sidecar shape is already honest. Cleanup produces `cleaned`; the active profile's name is `profile`. The type lives in `Sotto/History/AudioHistory.swift`.
+
+**The third slot is no longer yours, and it is no longer called `languages`** (2026-09-18, `DECISIONS.md`). **Apple Speech does not detect language at all**, so there was never a source to pick — the field was renamed to `locales` and is written at the end of every dictation from `LocaleDependentSpeechModule.selectedLocales`, which is the framework stating what it resolved to. It is an array because Apple's own property is, not because anything listens to more than one: both transcribers take a singular `init(locale:)` and `selectedLocales` is get-only, so it holds exactly one element today. **Do not build multi-locale listening on the strength of the plural**, and do not migrate the pre-rename entries that decode with `locales == []` — the old value was never a detection.
 
 ---
 
@@ -150,9 +152,9 @@ try await analyzer.finalizeAndFinishThroughEndOfInput()
 |---|---|
 | STT | **Apple `SpeechAnalyzer` / `SpeechTranscriber`, exclusively** (2026-08-19). `DictationTranscriber` past its 30 locales. **No non-Apple backend ships in v1** — Parakeet TDT v3, FluidAudio, and Whisper are all out |
 | VAD | **`SpeechDetector`**, preinstalled, wired in slice 5. Silero retired with the Parakeet path |
-| Compute | **ANE, shared with Foundation Models.** Mic-rate STT may overlap the LLM; import-rate STT is serialised around chat generation (§1.0) |
+| Compute | **ANE, shared with Foundation Models.** Mic-rate STT may overlap cleanup freely; the import-rate serialisation rule lost its subject 2026-09-18 (§1.0) |
 | Storage | Audio as Opus @ 24 kbps in CAF (`audio.caf` + `entry.json`). Obsidian is not a feature |
-| Retention | Audio: ring of 8 by default, configurable, with a pin flag. Imports auto-pinned |
+| Retention | Audio: **never delete by default** — `defaultRingLimit` is 0 (2026-09-18, `DECISIONS.md`); the ring still exists and is configurable from Settings → Dictation, with a pin flag. Imports auto-pinned |
 
 ---
 

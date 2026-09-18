@@ -2,7 +2,7 @@
 //  HistoryTests.swift
 //  SottoTests
 //
-//  Slice 5. Audio entries, the retention ring, and the chat-folder writer.
+//  Slice 5. Audio entries and the retention ring.
 //
 
 import AVFoundation
@@ -55,11 +55,43 @@ struct HistoryTests {
         #expect(entry.raw.contains("hello"))
         #expect(entry.cleaned == nil)
         #expect(entry.profile == nil)
-        #expect(entry.languages.isEmpty)
+        #expect(entry.locales.isEmpty)
         #expect(entry.pinned == false)
         #expect(entry.words.map(\.text) == ["hello", "there", "how", "are", "you"])
         #expect(entry.pauses.count == 1)
         #expect(abs(entry.pauses[0].duration - 0.50) < 0.000_1)
+    }
+
+    /// **Regression, 2026-09-18.** Every sidecar written before the `languages` →
+    /// `locales` rename has no `locales` key, and a synthesized decoder throws
+    /// `keyNotFound` on it rather than falling back to the property's `= []` —
+    /// which emptied the Audio pane with every recording still on disk. The
+    /// second half is the amplifier: one unreadable folder used to take the whole
+    /// list with it.
+    @Test func preRenameSidecarDecodesAndOneBadFolderDoesNotEmptyTheList() throws {
+        let root = scratch()
+        let folder = root.appendingPathComponent("20260913T014638Z-28C854", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try """
+        {
+          "created" : "2026-09-13T01:46:38Z",
+          "id" : "20260913T014638Z-28C854",
+          "languages" : [],
+          "pauses" : [],
+          "pinned" : false,
+          "raw" : "before the rename",
+          "words" : [{ "start" : 0.48, "text" : "before" }]
+        }
+        """.write(to: folder.appendingPathComponent("entry.json"), atomically: true, encoding: .utf8)
+
+        let entry = try AudioHistory.load(from: folder)
+        #expect(entry.locales.isEmpty)
+        #expect(entry.raw == "before the rename")
+
+        let broken = root.appendingPathComponent("broken", isDirectory: true)
+        try FileManager.default.createDirectory(at: broken, withIntermediateDirectories: true)
+        try "{".write(to: broken.appendingPathComponent("entry.json"), atomically: true, encoding: .utf8)
+        #expect(try AudioHistory.entries(in: root).map(\.id) == [entry.id])
     }
 
     @Test func disabledStoreWritesNothing() throws {
@@ -156,31 +188,6 @@ struct HistoryTests {
             pauses: [.init(start: 0.70, duration: 0.50)]
         )
         #expect(marked == "hello there [pause 500ms] how are you")
-    }
-
-    // MARK: - Chat folders
-
-    @Test func chatWriterDropsMarkdownAndAttachments() throws {
-        let root = scratch()
-        let url = try ChatFolder.write(
-            slug: "2026-08-19-sample",
-            markdown: "---\ncreated: 2026-08-19\n---\n\nhello\n",
-            attachments: ["note.txt": Data("hi".utf8)],
-            to: root
-        )
-        #expect(url.lastPathComponent == "2026-08-19-sample")
-        #expect(try String(contentsOf: url.appendingPathComponent("chat.md"), encoding: .utf8).contains("hello"))
-        #expect(FileManager.default.fileExists(atPath: url.appendingPathComponent("attachments").path))
-        #expect(try String(contentsOf: url.appendingPathComponent("attachments/note.txt"), encoding: .utf8) == "hi")
-    }
-
-    @Test func chatWriterCreatesEmptyAttachmentsDirectory() throws {
-        let root = scratch()
-        let url = try ChatFolder.write(slug: "empty-chat", markdown: "hi\n", to: root)
-        var isDir: ObjCBool = false
-        let attachments = url.appendingPathComponent("attachments")
-        #expect(FileManager.default.fileExists(atPath: attachments.path, isDirectory: &isDir) && isDir.boolValue)
-        #expect(try FileManager.default.contentsOfDirectory(at: attachments, includingPropertiesForKeys: nil).isEmpty)
     }
 }
 

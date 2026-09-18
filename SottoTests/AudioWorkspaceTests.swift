@@ -152,7 +152,7 @@ private func recording(
             raw: text,
             cleaned: nil,
             profile: nil,
-            languages: [],
+            locales: [],
             words: [],
             pauses: []
         ),

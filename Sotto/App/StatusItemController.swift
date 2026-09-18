@@ -62,9 +62,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         // nothing to list until the slice that owns them, so they are stubs with the
         // §10.1 labels intact.
         menu.addItem(stub("Profile", "Profiles arrive in a later build."))
-        menu.addItem(stub("Chat Model", "Chat models arrive in a later build."))
         menu.addItem(microphoneItem())
-        menu.addItem(stub("MCPs", "MCP servers arrive in a later build."))
 
         menu.addItem(.separator())
 

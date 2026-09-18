@@ -19,9 +19,9 @@ import os
 /// are per-process and die with the process. A wedged tap must never take the UI down
 /// with it.
 ///
-/// **What it reads.** Two keycodes are acted on, 54 and 61, plus one comparison against
-/// 53 for Escape. `Sotto` is a right-hand program (DECISIONS.md, 2026-08-15), so left
-/// Cmd and left Option are not triggers. One precision so §2.4's claim stays honest: a
+/// **What it reads.** One keycode is acted on, 61, plus one comparison against 53 for
+/// Escape. `Sotto` is a right-hand program (DECISIONS.md, 2026-08-15), so left Option is
+/// not a trigger. One precision so §2.4's claim stays honest: a
 /// `flagsChanged` subscription cannot be filtered per keycode by the OS, so the callback
 /// is handed every modifier and discards the rest on the next line. Nothing is decoded,
 /// nothing is accumulated, nothing is stored.
@@ -40,52 +40,21 @@ final class EventTap {
     /// one action fires" true rather than hoped for.
     private var abortedThisEvent = false
 
-    /// Per-Esc handshake with `OverlayPanel.Panel.cancelOperation` (§10.4): every
-    /// Escape the tap sees is marked before the event is delivered — priority 1
-    /// has already spent the press here, and for every other Esc the tap has
-    /// dispatched the 2–4 remainder to main, which runs it alone. The panel only
-    /// stands down. Written on the tap thread, consumed on main; the lock is both
-    /// the visibility edge (main cannot observe the write without it) and the
-    /// race protection a bare Bool would lack.
-    ///
-    /// Not reset between presses on purpose: the tap re-marks on every Esc, so a
-    /// mark left over from a press whose event never reached a key panel is
-    /// indistinguishable from the current one, and harmless for the same reason.
-    private let escStateLock = NSLock()
-    private var escapeHandledForCurrentPress = false
-
-    func markEscapeHandled() {
-        escStateLock.lock()
-        escapeHandledForCurrentPress = true
-        escStateLock.unlock()
-    }
-
-    /// Read-and-clear, for the panel on main. A false here means the press
-    /// bypassed the tap (a re-arm gap, another tap's swallow ahead of this one);
-    /// the panel treats it as nothing to do, keeping exactly-one honest.
-    func consumeEscapeHandled() -> Bool {
-        escStateLock.lock()
-        defer { escStateLock.unlock() }
-        guard escapeHandledForCurrentPress else { return false }
-        escapeHandledForCurrentPress = false
-        return true
-    }
-
     private init() {}
 
     /// The keycodes this file compares against, and the complete list.
     private enum Key {
         static let escape: Int64 = 53
-        static let rightCommand: Int64 = 54
         static let rightOption: Int64 = 61
     }
 
     /// Device-dependent modifier bits, from IOKit's `IOLLEvent.h`. A `flagsChanged`
-    /// event reports the whole modifier state, so `.maskCommand` cannot tell a Right Cmd
-    /// press from a Left one, and cannot tell a press from a release while the other
-    /// side is held. These bits can.
+    /// event reports the whole modifier state, so `.maskAlternate` cannot tell a Right
+    /// Option press from a Left one, and cannot tell a press from a release while the
+    /// other side is held. This bit can — and clearing it on a synthetic *release* is
+    /// what `rules/input-and-insertion.md` §5.1 warns about, since a release still
+    /// carrying it reads as a second press.
     private enum DeviceMask {
-        static let rightCommand: UInt64 = 0x0000_0010 // NX_DEVICERCMDKEYMASK
         static let rightOption: UInt64 = 0x0000_0040  // NX_DEVICERALTKEYMASK
     }
 
@@ -128,9 +97,6 @@ final class EventTap {
             Dictation.shared.stop()
         case .abort:
             Dictation.shared.abort()
-        case .overlay:
-            // A second double-tap while it is up puts it away (§5.1, §5.7).
-            OverlayPanel.shared.toggle()
         }
     }
 
@@ -220,12 +186,9 @@ final class EventTap {
         switch type {
         case .flagsChanged:
             switch keycode {
-            case Key.rightCommand:
-                let isDown = flags & DeviceMask.rightCommand != 0
-                disposition = recognizer.handle(isDown ? .rightCommandDown : .rightCommandUp)
             case Key.rightOption:
-                guard flags & DeviceMask.rightOption != 0 else { return pass }
-                disposition = recognizer.handle(.rightOptionDown)
+                let isDown = flags & DeviceMask.rightOption != 0
+                disposition = recognizer.handle(isDown ? .rightOptionDown : .rightOptionUp)
             default:
                 return pass // Every other modifier, discarded without being looked at.
             }
@@ -233,21 +196,16 @@ final class EventTap {
             let isEscape = keycode == Key.escape
             abortedThisEvent = false
             disposition = recognizer.handle(.otherKeyDown(isEscape: isEscape))
-            if isEscape {
-                // §10.4 top-down, exactly one. Priority 1 has already fired
-                // above, on this thread. The rest goes to main **asynchronously**:
-                // this is a `.defaultTap` at the head of the session, so while
-                // this callback runs, every keystroke in the session queues
-                // behind it — a `main.sync` here (as slice 9's first cut had)
-                // parked system-wide input on Sotto's main thread two or three
-                // times per Esc, in every app, idle or not. The mark is what
-                // keeps the ordering the sync used to buy: it is set before this
-                // event is delivered, so the panel stands down either way and
-                // `escRemainderFromTap` is the one runner of 2–4.
-                markEscapeHandled()
-                if !abortedThisEvent {
-                    DispatchQueue.main.async { OverlayPanel.shared.escRemainderFromTap() }
-                }
+            if isEscape, !abortedThisEvent {
+                // §10.4 top-down, exactly one — and with chat and the overlay gone
+                // the stack is two deep, not four. Priority 1 has already fired
+                // above, on this thread. Priority 2 goes to main
+                // **asynchronously**: this is a `.defaultTap` at the head of the
+                // session, so while this callback runs every keystroke in the
+                // session queues behind it, and a `main.sync` here parked
+                // system-wide input on Sotto's main thread two or three times per
+                // Esc, in every app, idle or not.
+                DispatchQueue.main.async { _ = Dictation.shared.cancelTranscription() }
             }
         case .keyUp:
             disposition = recognizer.handle(.otherKeyUp)
