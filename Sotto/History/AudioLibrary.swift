@@ -39,7 +39,7 @@ final class AudioLibrary {
         var id: String { entry.id }
         var created: Date { entry.created }
         var pinned: Bool { entry.pinned }
-        var languages: [String] { entry.languages }
+        var locales: [String] { entry.locales }
         var words: [Transcription.Draft.Word] { entry.words }
         var audio: URL { folder.appendingPathComponent("audio.caf") }
 

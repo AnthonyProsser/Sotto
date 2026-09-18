@@ -129,11 +129,11 @@ struct RecordingRow: View {
                 Text(recording.created.formatted(date: .abbreviated, time: .shortened))
                 Text(recording.durationLabel)
                     .monospacedDigit()
-                // **Nothing until slice 11 fills `languages`.** The badge is drawn
-                // and rendered conditionally rather than shown empty: a chip
-                // reading "—" would assert that the language is unknown, when in
-                // fact nothing has looked yet.
-                ForEach(recording.languages, id: \.self) { LanguageBadge(code: $0) }
+                // Empty on every entry written before 2026-09-18, and the row
+                // is drawn conditionally rather than shown empty: a chip reading
+                // "—" would assert the locale is unknown, when in fact that
+                // recording predates Sotto storing it.
+                ForEach(recording.locales, id: \.self) { LocaleBadge(code: $0) }
             }
             .font(.caption)
             .foregroundStyle(.secondary)
@@ -142,7 +142,10 @@ struct RecordingRow: View {
     }
 }
 
-struct LanguageBadge: View {
+/// **The locale the transcriber was listening in, not a detection.** Apple Speech
+/// does not detect language (`DECISIONS.md`, 2026-09-18); it transcribes in the
+/// locale its module was built with, and that is what this shows.
+struct LocaleBadge: View {
     let code: String
 
     var body: some View {
@@ -202,13 +205,13 @@ struct AudioDetail: View {
 
     private func content(_ recording: AudioLibrary.Recording) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            if !recording.languages.isEmpty {
-                // The detected-language badges lived under the in-content
-                // title; the title moved to the window bar (Slice 10) and
-                // `.navigationSubtitle` is text only, so the badges stay here
-                // as a thin row above the transport.
+            if !recording.locales.isEmpty {
+                // The locale badges lived under the in-content title; the title
+                // moved to the window bar (Slice 10) and `.navigationSubtitle`
+                // is text only, so the badges stay here as a thin row above the
+                // transport.
                 HStack(spacing: 4) {
-                    ForEach(recording.languages, id: \.self) { LanguageBadge(code: $0) }
+                    ForEach(recording.locales, id: \.self) { LocaleBadge(code: $0) }
                 }
                 .padding([.horizontal, .top])
             }

@@ -2,6 +2,8 @@
 
 **Open this before loading a model, estimating memory, gating anything on hardware, adding an outbound connection, or touching MCP or the updater.** `CLAUDE.md` §0.1 routes you here. The consent rule itself is short enough to live in `CLAUDE.md` §2; this file is the reasoning and the mechanics.
 
+> **Most of this file described the chat layer, and the chat layer was deleted on 2026-09-18** (`DECISIONS.md`). What survives is §1.1's measurements of Apple's on-device model — cleanup still uses it — and §2's consent rule, now with one connection instead of three. **§1's memory estimate, §1's `mlx-swift`/OpenAI-compatible row, §3's MCP, and §4's cloud fallback have nothing left to govern.** They are kept, not deleted, because each records why an option lost; a future version that wants one of them back should read the argument rather than re-run it. **Nothing in them is a description of Sotto as it stands.**
+
 ---
 
 ## 1. Predict, don't gate (principle 3)
@@ -64,9 +66,11 @@ A model download that fails surfaces in the model list where it started (§7.4),
 
 | Connection | Consent |
 |---|---|
-| A model download | The user started it (§7.4) |
-| An MCP server | The user enabled it (§6; **disabled out of the box**) |
 | The update check | Default on, weekly, one toggle (§10.6) |
+| ~~A model download~~ | Gone 2026-09-18 with the model list |
+| ~~An MCP server~~ | Gone 2026-09-18 with the chat layer |
+
+**Sotto now makes exactly one kind of outbound request.** That is the rule holding, not tightening: the test never counted connections, and two of the three simply lost the feature that justified them.
 
 Earlier versions claimed zero outbound connections, then a closed list of two; both were the wrong shape, because the constraint was never about how many. **That test is what permanently rules out telemetry, crash reporting, analytics, and remote config** — not a list, but the fact that nobody asks for them, so they can never pass. Anything that would connect without the user having done something or turned something on does not get built.
 

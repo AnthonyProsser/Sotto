@@ -27,17 +27,16 @@ final class Activity {
 
     private init() {}
 
-    /// **§14.8's list, complete and closed.** The slice in each comment is the one
-    /// that wires it; only `mainWindow` is wired today. Adding a case is adding to
-    /// the spec's list, so it needs the same argument the seven below had.
+    /// **§14.8's list, minus everything chat owned** (Anthony, 2026-09-18,
+    /// `DECISIONS.md`). `overlay`, `generating`, and `modelLoading` described a
+    /// surface, a response, and a weights load that no longer exist. The four
+    /// below are the whole of what can make Sotto awake now. Adding a case is
+    /// adding to the spec's list, so it needs the same argument the seven had.
     enum Contributor: CaseIterable {
         case recording          // slice 3 — either gesture, including latched
-        case overlay            // slice 9
         case mainWindow         // slice 1
-        case generating         // slice 7 — a chat response in flight
         case fileTranscription  // slice 14
         case cleanup            // slice 11
-        case modelLoading       // slice 8
     }
 
     private(set) var active: Set<Contributor> = []

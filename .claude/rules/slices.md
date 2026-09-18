@@ -1,6 +1,8 @@
-# How to work a slice, and the four things that cross them
+# How to work a slice, and the things that cross them
 
 **Open this when starting a slice, or when the work lands in more than one.** `CLAUDE.md` §0.1 routes you here.
+
+> **Slices 7–12 are void as of 2026-09-18** (`DECISIONS.md`): 7 and 8 (model management), 9 (overlay and chat), 10 (chat in the main window), 12 (MCP) have no product left, and **11 survives only as cleanup and profiles** — its model-picker half went with the model list. Their §5 amendments below are kept as the record of what was decided, not as work to do. **Slices 0–6, 11 (cleanup), 13, 14, and 15 are unaffected.** The remaining build order is: finish the dictation path, and nothing above it.
 
 ---
 
@@ -26,19 +28,19 @@ Builds: `.accessory` at launch, the §10.1 `NSMenu` with stubbed submenus, the s
 
 ---
 
-## 3. The five threads that cross slices
+## 3. The threads that cross slices
 
-Five things are built in pieces and go wrong if each slice treats them as local.
+Five were named here; **two of the five lost most of their span on 2026-09-18** and are marked below. They are still built in pieces and still go wrong if a slice treats them as local.
 
-**The idle / not-idle signal (§14.8).** Defined in **slice 1**; fed by slices **3, 7, 9, 10, 11, 14**. Not idle covers: recording (either gesture, including latched), overlay open, main window open, a response generating, a file transcription running, cleanup running, a model loading. Define it once as a single observable with a documented contributor list, or seven later slices each quietly add a second source of truth. The icon reports that Sotto is **awake**, not that Sotto is recording — macOS 26 already draws its own mic indicator in the same menu bar, and duplicating it would be Sotto asserting something the system asserts better.
+**The idle / not-idle signal (§14.8).** Defined in **slice 1**; fed by slices **3, 11, 14**. **Four contributors, not seven** (2026-09-18): recording (either gesture, including latched), main window open, a file transcription running, cleanup running. `overlay`, `generating`, and `modelLoading` named things that no longer exist. Define it once as a single observable with a documented contributor list, or later slices each quietly add a second source of truth. The icon reports that Sotto is **awake**, not that Sotto is recording — macOS 26 already draws its own mic indicator in the same menu bar, and duplicating it would be Sotto asserting something the system asserts better.
 
-**The Escape priority stack (§10.4).** Exactly one action fires: abort in-flight gesture (slice **2**) → cancel transcription (slice **3**) → stop chat generation (slice **9**) → close overlay (slice **9**). Slice **13**'s scrim preempts all four. Full rule in `.claude/rules/input-and-insertion.md` §3.
+**The Escape priority stack (§10.4).** Exactly one action fires: abort in-flight gesture (slice **2**) → cancel transcription (slice **3**). **Two deep since 2026-09-18** — stop generation and close overlay are gone. Full rule in `.claude/rules/input-and-insertion.md` §3.
 
 **Error routing (§14.3).** No central error type, no central vocabulary. Each failure names its own surface at the point it is thrown. Surfaces are designed in the slice that owns them — slice **6** designs the file-transcription failure slot even though nothing produces one until slice **14**. Full table in `.claude/rules/design.md` §10.
 
 **The cleanup model's warm-up.** The hook is set in **slice 3**, fired **at launch** from `Dictation.prepare()` (2026-08-23; it fired from the gesture until then), and consumed by **slice 11**. Apple's on-device model costs ~3.5 s on the first request after launch and ~850 ms after that (measured 2026-08-19), so an un-prewarmed cleanup puts 3.5 s into the gap between speaking and seeing text on the first dictation of every session. **Slice 3 leaves the seam even though nothing fills it yet** — otherwise slice 11 reaches back into gesture handling to add one. Prewarming is never an `Activity` contributor; full rule in `.claude/rules/audio-and-transcription.md` §3.1.
 
-**The token sheet's growth (§14.2).** One row at a time, each a four-part claim. Starts empty in slice **1** with whatever the menu and settings window actually consume. Three tier-2 entries are pre-approved — waveform idle bar (slice **3**), the scrim pair (slice **13**), overlay intrusiveness (slice **9**). Full rule in `.claude/rules/design.md` §9.
+**The token sheet's growth (§14.2).** One row at a time, each a four-part claim. Starts empty in slice **1** with whatever the menu and settings window actually consume. Two tier-2 entries are pre-approved — waveform idle bar (slice **3**) and the scrim pair (slice **13**). **Overlay intrusiveness is withdrawn** (2026-09-18). Full rule in `.claude/rules/design.md` §9.
 
 ---
 
@@ -79,8 +81,9 @@ Do not build past one of these without asking — `.claude/rules/open-questions.
 ### Slice 5 — History storage
 
 - **Obsidian is not a feature** (`DECISIONS.md`, 2026-08-19). The chat writer is `chat.md` + `attachments/` because that is the data, not because of a vault. No sample vault, no Obsidian check. The writer ships with no caller; slice 9 is the first real chat.
-- **Audio entries are a folder with `audio.caf` (Opus @ 24 kbps) and pretty-printed `entry.json`.** Inspectable in any text reader. Ring of 8, pin, "never delete" at limit 0.
-- **`cleaned`, `profile`, and `languages` are empty slots.** Do not invent values. Slice 11 fills them — see the Slice 11 amendment below.
+- **Audio entries are a folder with `audio.caf` (Opus @ 24 kbps) and pretty-printed `entry.json`.** Inspectable in any text reader. Pin, configurable ring, and **"never delete" (limit 0) is now the default** — 2026-09-18, `DECISIONS.md`, superseding the ring of 8/10.
+- **`cleaned` and `profile` are empty slots.** Do not invent values. Slice 11 fills them — see the Slice 11 amendment below. **The third slot is `locales`, not `languages`, and it is no longer empty**: it is written from `SpeechAnalyzer`'s resolved locale at the end of every dictation, because Apple Speech does not detect language (2026-09-18, `DECISIONS.md`).
+- **`AudioHistoryEnabled` and `AudioHistoryRingLimit` now have a control** — `Sotto/Views/DictationPane.swift`, bound with `@AppStorage` to the same keys. Do not add a second reader.
 
 ### Slice 6 — Audio workspace
 
@@ -93,12 +96,14 @@ Do not build past one of these without asking — `.claude/rules/open-questions.
 - **`Recording.duration` is read from the CAF header, not stored.** Slice 5's `AudioEntry` schema is unchanged — a fourth slot would have to be backfilled into every existing entry to be trustworthy. No `DECISIONS.md` row.
 - **The sidebar column width is unset, so `NavigationSplitView` collapses it to ~140 pt and truncates row titles to about three words.** There is no system constant. Under `CLAUDE.md` §0.7 and `rules/design.md` §1 this is a local constant, not a tier-2 token: the next session working that pane picks a width, writes it in the view, and says so in one line. **The earlier instruction to put it to Anthony is withdrawn** — it was escalated under the rules as they stood before 2026-08-21.
 
-### Slice 9 — Overlay and chat · Slice 14 — File transcription
+### ~~Slice 9 — Overlay and chat~~ · Slice 14 — File transcription
+
+**Void 2026-09-18 for the slice 9 half. Slice 14 no longer waits on anything** — there is no chat generation to serialise against, so an import runs when the user starts it.
 
 - **Import transcription is serialised around active chat generation.** At 60× realtime an import costs cleanup **+76 %** latency and loses **24 %** of its own throughput. Slice 14 waits on a generating response rather than competing with it; slice 9 owns the signal it waits on. Neither applies to microphone dictation, which overlaps freely.
 - **Cleanup and chat each own a `LanguageModelSession`.** Sharing one throws `concurrentRequests` deterministically, and concurrency buys no throughput — the model serialises. `rules/models-and-network.md` §1.1.
 
-### Slice 10 — Chat in the main window
+### ~~Slice 10 — Chat in the main window~~ — **void 2026-09-18**, record only
 
 - **Generation wires into both the main window's Chat detail and the overlay's docked panel, not the main window alone** — the build order's line naming the window only predates the overlay having its own send/generate (slice 9). `DECISIONS.md`, 2026-09-02.
 - **The Chat detail carries its own composer**, reusing the overlay's `ComposerField`/`ComposerChips`/`ComposerAddMenu`/`ComposerSendButton`. `DECISIONS.md`, 2026-09-02.
@@ -116,6 +121,7 @@ Do not build past one of these without asking — `.claude/rules/open-questions.
 - **Cleanup defaults to Apple's on-device model**, with `Guardrails.permissiveContentTransformations`. Still per-profile.
 - **Fix the self-correction instruction.** Measured: the model preserves "no wait, actually" instead of resolving to what the speaker settled on, which is what §4.6 asks for.
 - **Fill the prewarm seam** slice 3 left; never set `Activity.Contributor.cleanup` for a prewarm.
-- **Fill the three empty slots on `AudioEntry`.** Slice 5 writes `cleaned`, `profile`, and `languages` as `nil` / `[]` so the on-disk shape does not change later. Cleanup writes `cleaned`. The active profile's name writes `profile`. Detected languages write `languages` — Apple Speech does not emit Whisper-style language tokens, so decide the source here rather than assuming one. The sidecar is `Sotto/History/AudioHistory.swift`.
+- **The per-profile cleanup model picker is gone with the model list** (2026-09-18). Cleanup is Apple's `SystemLanguageModel` or it is off.
+- **Fill the two remaining empty slots on `AudioEntry`.** Slice 5 writes `cleaned` and `profile` as `nil` / `[]` so the on-disk shape does not change later. Cleanup writes `cleaned`. The active profile's name writes `profile`. **The third slot is settled and is not yours**: `languages` became `locales` on 2026-09-18 and is written from `LocaleDependentSpeechModule.selectedLocales`, because Apple Speech does no language detection — `DECISIONS.md`, and `rules/audio-and-transcription.md` §3.1. The sidecar is `Sotto/History/AudioHistory.swift`.
 
 Full reasoning for all of these is in `rules/audio-and-transcription.md` §3.1 and `rules/models-and-network.md` §1.1.

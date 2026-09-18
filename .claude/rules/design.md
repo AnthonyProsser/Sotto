@@ -85,7 +85,7 @@ Liquid Glass supplies adaptive backdrop tint, specular edge, rim refraction, and
 content.glassEffect(in: .rect(cornerRadius: 16, style: .continuous))
 ```
 
-Never substitute `.ultraThinMaterial`, `NSVisualEffectView` plus overlays, or `.blur(radius:)`. Sotto uses floating-panel glass for the overlay and Control Center–style glass for the HUD. **One measured exception, and it is not a licence for others:** the chat panel's wash is an edgeless field rather than a surface, and glass was rejected there on numbers, not taste — §4.3's last bullet. `WashView` is the only `NSVisualEffectView` in the app; a §14 grep hit anywhere else is a finding. A surface normally gets one treatment; more than two of material/stroke/shadow/gradient/tint is a finding.
+Never substitute `.ultraThinMaterial`, `NSVisualEffectView` plus overlays, or `.blur(radius:)`. Sotto uses floating-panel glass for the overlay and Control Center–style glass for the HUD. **One measured exception, and it is not a licence for others:** the chat panel's wash is an edgeless field rather than a surface, and glass was rejected there on numbers, not taste — §4.3's last bullet. `WashView` was the only `NSVisualEffectView` in the app and went out with the chat panel on 2026-09-18, so **any `NSVisualEffectView` hit in a §14 grep is now a finding, with no exception left**. §4.3's measurements are kept as the reference for behind-window vibrancy, not as a description of a surface that ships. A surface normally gets one treatment; more than two of material/stroke/shadow/gradient/tint is a finding.
 
 ### 4.3 Behind-window vibrancy — what it will and will not give you
 
@@ -255,7 +255,12 @@ osascript -e 'tell application "System Events" to tell process "Sotto" \
 screencapture -x -o -R"x,y,w,h" /tmp/shot.png
 ```
 
-Capture the window rect only: full-screen capture can expose unrelated desktop content. `screencapture` captures the active Space; activate Sotto first. System Events identifies by process name, so run `pgrep -lf` and stop stale builds before trusting it. A missing window is an expected case here, not a failed capture.
+Capture the window rect only: full-screen capture can expose unrelated desktop content. `screencapture` captures the active Space; activate Sotto first.
+
+**Two ways that activation and the menu bar lie, both hit 2026-09-18:**
+
+- **`tell application "Sotto" to activate` does nothing for an `.accessory` app**, and fails quietly under `2>/dev/null`. The capture then lands on whatever window is at those coordinates — a screenshot of a *different app* that looks like Sotto rendering wrongly. Use `tell application "System Events" to tell process "Sotto" to set frontmost to true`, and read the image before believing it.
+- **System Events' `click` on a status-menu item returns success and fires nothing.** `perform action "AXPress"` on the same item works. The symptom is a menu action that appears dead — here, **History…** not opening the main window — which reads as broken responder-chain wiring. Check with `AXPress` before opening `StatusItemController`. System Events identifies by process name, so run `pgrep -lf` and stop stale builds before trusting it. A missing window is an expected case here, not a failed capture.
 
 ### 8.3 Judgment and visual changes
 
@@ -292,10 +297,10 @@ No global error token, central error vocabulary, notification, or modal. Errors 
 | Failure | Surface |
 |---|---|
 | Transcription, audio model load, cleanup failing **mid-pass**, AX write | HUD (§4.5) |
-| Cleanup or chat model **unavailable** — `SystemLanguageModel.availability != .available` | Settings, the pane that owns it: Dictation for cleanup, Chat for chat. Model picker with a banner naming the reason |
-| Chat model load, generation, tool call | Chat: overlay or main window |
+| Cleanup model **unavailable** — `SystemLanguageModel.availability != .available` | Settings → Dictation, with a banner naming the reason. There is no picker beside it any more, so the banner is the whole surface |
+| ~~Chat model load, generation, tool call~~ | Gone 2026-09-18 with the chat layer |
 | File transcription | Main window, Audio pane |
-| Model download | Originating model list (§7.4) |
+| ~~Model download~~ | Gone 2026-09-18 with the model list |
 
 **Unavailable is not a failure, and that is why it moved** (2026-08-19, `DECISIONS.md`). A model that fails mid-pass is a runtime event inside work the user just started, so it belongs on the surface that started it. Apple's on-device model cannot fail to load — it is enabled on the machine or it is not, the state is knowable before the gesture fires, and the remedy is in System Settings. A HUD morph repeating "cleanup unavailable" on every single dictation is a notification in all but name, which `CLAUDE.md` §2 rules out. **Slice 3 therefore designs the error morph with no model-unavailable string in it.**
 
@@ -325,7 +330,7 @@ It is an undated, unlocked sketch, not to scale: its 378 × 70/radius 22 compose
 | `state.recording` / `state.latched` | Hand state communicates mode; waveform confirms capture |
 | `state.error` / `state.network` | Deleted with tier 3; errors route per §10 |
 | Theme struct | Inherit System Settings wholesale; no runtime role switching |
-| Appearance tab | **Partially reversed 2026-09-03** (`DECISIONS.md`): the tab exists, but holds one control — which surface is drawn behind the docked overlay (`AppearanceSettings.ChatPanelStyle`). Still no theme struct, no light/dark override, no tint control; appearance is still inherited wholesale |
+| Appearance tab | **Cut again 2026-09-18** (`DECISIONS.md`). The 2026-09-03 reversal gave it exactly one control — which surface is drawn behind the docked overlay — and the overlay is gone, so spec §8.5's original “Appearance — none” stands. Settings is General and Dictation |
 | MCP network badge | Opt-in/off-by-default is sufficient; marker is decoration |
 | Compose-bar model selector | Menu bar owns model choice |
 | HUD waveform toggle | Waveform is mandatory |

@@ -50,11 +50,6 @@ final class Dictation {
     /// it; a later gesture must not be able to re-enter it.
     private var capturing = false
 
-    /// §4.9's routing input, read at the moment the user starts speaking rather
-    /// than when they stop: clicking elsewhere to place a cursor deselects, so a
-    /// selection read at the end would be a different question.
-    private var selection: String?
-
     private init() {}
 
     // MARK: - Launch
@@ -150,13 +145,6 @@ final class Dictation {
 
         capturing = true
 
-        // Read after capture is running, not before it: the Cmd+C fallback in
-        // `selectedText()` polls the pasteboard for up to 300 ms, and paying that
-        // ahead of the first sample would clip the first word. It suspends rather
-        // than blocks, so the waveform keeps moving while it waits.
-        selection = nil
-        Task { selection = await Insertion.selectedText() }
-
         pipeline = Task { [stream] in
             do {
                 try await Transcription.shared.begin(stream)
@@ -248,46 +236,16 @@ final class Dictation {
         Task { await Transcription.shared.cancel() }
     }
 
-    /// §4.9 first, then §5.4 overlay dictation, then §3's ladder.
+    /// §3's ladder, and nothing before it.
+    ///
+    /// **Selection no longer routes anywhere** (Anthony, 2026-09-18, `DECISIONS.md`).
+    /// §4.9 sent a dictation made against selected text to the chat draft; chat is
+    /// gone, so the transcript takes the ordinary path and the AX write replaces
+    /// whatever was selected. This contradicts §4.9's "selected text is never a
+    /// dictation target" — his call, logged, and the spec copy is stale on it.
     private func deliver(_ draft: Transcription.Draft) {
         guard !draft.text.isEmpty else {
             log.notice("Nothing transcribed.")
-            finish(with: nil)
-            return
-        }
-
-        // **Overlay dictation fills the bar with an ordinary message (§5.4).**
-        // Not automatically about an attached block — just as typed input would be.
-        if Activity.shared.active.contains(.overlay) {
-            var bar = DraftStore.shared.draft.text
-            if !bar.isEmpty && !bar.hasSuffix(" ") && !bar.hasSuffix("\n") { bar += " " }
-            bar += draft.text
-            DraftStore.shared.draft.text = bar
-            // Leave selection attachment path alone — that comes via the + menu / auto-capture, not via this.
-            log.notice("Routed dictation to overlay bar: \(draft.words.count, privacy: .public) words.")
-            finish(with: nil)
-            return
-        }
-
-        // **Selection routes to chat, always** (§4.9) — both gestures, and the
-        // gesture does not change the routing. Chat is slice 9, so this is the
-        // stub the build order asks for: log and drop, with the branch wired so
-        // slice 9 fills a hole rather than adding one. Selected text is never a
-        // dictation target; to replace text, delete it first.
-        if let selection, !selection.isEmpty {
-            // Attach selection as chip + transcript as ordinary message in draft.
-            let app = NSWorkspace.shared.frontmostApplication?.localizedName ?? "Unknown"
-            DraftStore.shared.addSelection(app: app, text: selection)
-            var bar = DraftStore.shared.draft.text
-            if !bar.isEmpty && !bar.hasSuffix(" ") && !bar.hasSuffix("\n") { bar += " " }
-            bar += draft.text
-            DraftStore.shared.draft.text = bar
-            // Ensure overlay shows so user sees where it went.
-            OverlayPanel.shared.show()
-            log.notice("""
-                Routed to chat draft (slice 9): \(draft.words.count, privacy: .public) words \
-                against a \(selection.count, privacy: .public)-character selection.
-                """)
             finish(with: nil)
             return
         }
@@ -314,7 +272,6 @@ final class Dictation {
         pipeline = nil
         armed = nil
         capturing = false
-        selection = nil
         // **The one exit closes the microphone too.** `finish` is reachable from
         // `start()`'s catch with capture already running — `begin` throwing left
         // the engine live, `pipeline` nil, and the release that followed rejected

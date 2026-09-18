@@ -14,14 +14,21 @@ import os
 /// because it has to be loaded back; it is pretty-printed because a text
 /// editor is the viewer. Obsidian is not a feature (`DECISIONS.md`, 2026-08-19).
 ///
-/// **Empty slots are deliberate.** `cleaned`, `profile`, and `languages` exist
-/// so slice 11 can fill them without changing the on-disk shape. See
-/// `rules/slices.md` §5.
+/// **`cleaned` and `profile` are deliberate empty slots**, so slice 11 can fill
+/// them without changing the on-disk shape. See `rules/slices.md` §5. `locales`
+/// is filled here, from the transcriber.
 nonisolated enum AudioHistory {
 
-    /// **Ten, not spec §9.2's eight** (2026-08-23, `DECISIONS.md`). Configurable
-    /// either way, and 0 is still "never delete."
-    static let defaultRingLimit = 10
+    /// **Zero — "never delete" — is now the default** (Anthony, 2026-09-18,
+    /// `DECISIONS.md`). Spec §9.2 says eight and 2026-08-23 raised it to ten; both
+    /// were sized for a ring whose job was to bound disk. The recordings are now
+    /// wanted as a corpus for improving the dictation path, and §4.3's calibration
+    /// already reads them — a ring that throws the tenth away is deleting the data
+    /// the feature is for. Still configurable, and the setting is in
+    /// Settings → Dictation.
+    ///
+    /// Opus at 24 kbps is ~0.18 MB/min, so unbounded is ~1 GB per 100 hours.
+    static let defaultRingLimit = 0
     static let enabledKey = "AudioHistoryEnabled"
     static let ringLimitKey = "AudioHistoryRingLimit"
 
@@ -91,7 +98,7 @@ nonisolated enum AudioHistory {
             raw: mark(draft.text, words: draft.words, pauses: draft.pauses),
             cleaned: nil,
             profile: nil,
-            languages: [],
+            locales: draft.locales,
             words: draft.words,
             pauses: draft.pauses
         )
@@ -110,7 +117,19 @@ nonisolated enum AudioHistory {
             at: root,
             includingPropertiesForKeys: [.isDirectoryKey]
         ).filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true }
-        return try dirs.map(load(from:)).sorted { $0.created < $1.created }
+        // **One unreadable folder must not empty the pane.** `read` in
+        // `AudioLibrary` turns a throw here into an empty list, so an all-or-nothing
+        // map makes every recording hostage to the worst sidecar on disk — which is
+        // exactly what the `locales` rename did until `AudioEntry.init(from:)` below
+        // was written. Skip the folder, log it, show the rest.
+        return dirs.compactMap { folder in
+            do {
+                return try load(from: folder)
+            } catch {
+                log.error("Unreadable entry at \(folder.lastPathComponent, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                return nil
+            }
+        }.sorted { $0.created < $1.created }
     }
 
     static func setPinned(_ pinned: Bool, id: String, in root: URL) throws {
@@ -315,9 +334,15 @@ nonisolated enum AudioHistory {
     }()
 }
 
-/// On-disk shape of one dictation. Slice 11 fills `cleaned`, `profile`, and
-/// `languages`; until then they travel as empty slots so the schema does not
-/// change under the Audio pane.
+/// On-disk shape of one dictation. Slice 11 fills `cleaned` and `profile`; until
+/// then they travel as empty slots so the schema does not change under the Audio
+/// pane.
+///
+/// **`languages` became `locales` on 2026-09-18** (`DECISIONS.md`): Apple Speech
+/// does not detect language, so the old field recorded the *configured* locale
+/// under a name that claimed it was a detection. Entries written before the
+/// rename decode with `locales == []` — see `init(from:)` for why that needs
+/// code — and nothing migrates, because the old value was never a detection.
 nonisolated struct AudioEntry: Sendable, Codable, Equatable {
     var id: String
     var created: Date
@@ -325,9 +350,40 @@ nonisolated struct AudioEntry: Sendable, Codable, Equatable {
     var raw: String
     var cleaned: String?
     var profile: String?
-    var languages: [String]
+    var locales: [String] = []
     var words: [Transcription.Draft.Word]
     var pauses: [Transcription.Draft.Pause]
+}
+
+extension AudioEntry {
+    /// **Hand-written because a synthesized decoder ignores default values.**
+    /// `var locales: [String] = []` reads as "missing key, empty array" and is
+    /// not: the synthesized `init(from:)` throws `keyNotFound`, so every entry
+    /// written before the 2026-09-18 rename failed to decode, `entries(in:)`
+    /// failed with the first of them, and the Audio pane went empty with all ten
+    /// recordings still on disk. Measured against the real sidecars, not reasoned
+    /// about — the claim that they "decode with `locales == []`" was wrong.
+    ///
+    /// Only the new key is read. The old `languages` value was always the empty
+    /// array it was written as, and it was never a detection, so there is nothing
+    /// to migrate. **Every other field stays required**: a sidecar with no `raw`
+    /// or no `words` is a broken recording, not an old one, and `entries(in:)`
+    /// now skips it rather than hiding the rest.
+    ///
+    /// It lives in an extension so the memberwise initialiser `save` uses is
+    /// still synthesized.
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        created = try container.decode(Date.self, forKey: .created)
+        pinned = try container.decode(Bool.self, forKey: .pinned)
+        raw = try container.decode(String.self, forKey: .raw)
+        cleaned = try container.decodeIfPresent(String.self, forKey: .cleaned)
+        profile = try container.decodeIfPresent(String.self, forKey: .profile)
+        locales = try container.decodeIfPresent([String].self, forKey: .locales) ?? []
+        words = try container.decode([Transcription.Draft.Word].self, forKey: .words)
+        pauses = try container.decode([Transcription.Draft.Pause].self, forKey: .pauses)
+    }
 }
 
 
@@ -341,5 +397,4 @@ extension Notification.Name {
     /// to serve a window that is usually closed. `CLAUDE.md` §2's "nothing is a
     /// notification" is about the user-facing kind — this one is `NotificationCenter`.
     static let audioHistoryDidChange = Notification.Name("SottoAudioHistoryDidChange")
-    static let sottoCancelGeneration = Notification.Name("SottoCancelGeneration")
 }

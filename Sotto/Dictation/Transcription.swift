@@ -70,6 +70,19 @@ actor Transcription {
         var text: String
         var words: [Word]
         var pauses: [Pause]
+
+        /// **What the transcriber was listening for, not what it heard.** Apple's
+        /// Speech framework does not detect language — it transcribes in the
+        /// locale the module was built with, so a "detected languages" field
+        /// would be a fiction (Anthony, 2026-09-18, `DECISIONS.md`).
+        ///
+        /// Plural because `LocaleDependentSpeechModule.selectedLocales` is
+        /// plural, and this is read straight off it rather than reconstructed.
+        /// **Today it always holds exactly one**, because the only initialiser
+        /// either transcriber offers is `init(locale:)`, singular. If Apple ever
+        /// lets a module select several, this fills itself and neither the
+        /// schema nor the badge row changes.
+        var locales: [String] = []
     }
 
     enum Failure: LocalizedError {
@@ -191,6 +204,9 @@ actor Transcription {
         var draft = try await collector.value
         // A detector failure must not take the transcript with it.
         draft.pauses = (try? await pauseCollector?.value) ?? []
+        // Before `teardown()` fires in the defer above — the module is what holds
+        // the answer, and it is gone a line later.
+        draft.locales = engine?.selectedLocales ?? []
         return draft
     }
 
@@ -250,6 +266,16 @@ actor Transcription {
             switch self {
             case .speech(let m): m
             case .dictation(let m): m
+            }
+        }
+
+        /// Read from the live module rather than from `Kind`'s stored locale: the
+        /// framework is the authority on what it resolved to, and `selectedLocales`
+        /// is where it says so.
+        var selectedLocales: [String] {
+            switch self {
+            case .speech(let m): m.selectedLocales.map(\.identifier)
+            case .dictation(let m): m.selectedLocales.map(\.identifier)
             }
         }
 

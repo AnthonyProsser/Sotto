@@ -48,7 +48,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         Dictation.shared.prepare()
         // Every model already on disk becomes a chat backend before the first
         // send — slice 7's chat cannot run a local model it has no way to name.
-        ChatEngine.shared.registerLocalModels()
     }
 
     @objc private func handleWake() {
@@ -89,9 +88,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         MainWindowController.shared.toggleSettings()
     }
 
-    /// **History…** in the menu bar (§10.1). Opens the main window on the Audio
-    /// mode — §10.2's workspace, not a quick switch.
+    /// **History…** in the menu bar (§10.1). Opens the main window on the
+    /// recordings list — §10.2's workspace, not a quick switch.
     @IBAction func showHistory(_ sender: Any?) {
-        MainWindowController.shared.show(mode: .audio)
+        MainWindowController.shared.showHistory()
     }
 }

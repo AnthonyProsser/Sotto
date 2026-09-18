@@ -10,9 +10,9 @@ Each rule below has a reason attached. The reason is load-bearing: a rule withou
 
 **The tap runs on a dedicated thread, never the main runloop (§2.5).** Hard requirement, not an optimization. If a tap callback blocks the main thread the menu bar goes unresponsive, which breaks quit-as-panic (§10.5) — and quitting is the only reliable shutdown path, because event taps are per-process and die with the process. A wedged tap must never take the UI down with it.
 
-**The tap observes modifier keycodes only** — 54/55 for Right/Left Cmd, 58/61 for Option. Carbon's `RegisterEventHotKey` cannot distinguish left from right, which is why there is a tap at all. No key content is read, buffered, or stored, and the code should make that obvious to someone auditing it.
+**The tap observes one modifier keycode — 61, Right Option — plus Escape.** Right/Left Cmd (54/55) and Left Option (58) stopped being read on 2026-09-18 when both dictation gestures moved onto Right Option. Carbon's `RegisterEventHotKey` cannot distinguish left from right, which is why there is a tap at all. No key content is read, buffered, or stored, and the code should make that obvious to someone auditing it.
 
-**Right Command is never consumed (§4.1).** It stays a live modifier, so Right-Cmd+C keeps copying.
+**Right Option is never consumed before the 250 ms threshold (§4.1).** Until then it stays a live modifier, which is what keeps Option+e and every other dead key working. Consumption starts at the threshold and ends with the gesture; the release always passes, or every app on the machine believes Option is still held.
 
 **Synthetic events are tagged and filtered (§2.6).** Sotto posts Cmd+C (selection fallback) and Cmd+V (clipboard paste). Both must be tagged or the app's own hotkey detector fires on its own output:
 
@@ -50,10 +50,10 @@ Post to `.cgAnnotatedSessionEventTap`, **not** the HID tap — that is what deli
 
 1. Abort in-flight gesture → discard audio, insert nothing, **and disarm the gesture** — slice **2**
 2. Cancel transcription in progress — slice **3**
-3. Stop chat generation — slice **9**
-4. Close overlay — slice **9**
 
-Slice **13**'s scrim preempts all four while it is up. The global monitor installs **only while app UI is live** — Escape is never swallowed system-wide.
+**Priorities 3 (stop chat generation) and 4 (close overlay) were deleted 2026-09-18** with the chat layer; the stack is two deep. `EventTap`'s `escapeHandledForCurrentPress` handshake went with them — it existed so the tap and `OverlayPanel.Panel.cancelOperation` could not both fire on one press, and one consumer has nothing to arbitrate against. **Do not reintroduce a handshake for a second consumer without a second consumer.**
+
+The global monitor installs **only while app UI is live** — Escape is never swallowed system-wide.
 
 This is one of the four cross-slice threads; see `.claude/rules/slices.md`.
 
@@ -69,8 +69,10 @@ This is one of the four cross-slice threads; see `.claude/rules/slices.md`.
 
 | Gesture | Does |
 |---|---|
-| Hold or double-tap **Right Cmd** | Dictate — routes to chat if text is selected |
-| Double-tap **Option** | Overlay |
+| Hold **Right Option** | Push-to-talk dictation |
+| Double-tap **Right Option** | Latched dictation; a third tap stops it |
+
+**There is no third gesture, and selection no longer routes anywhere** (2026-09-18, `DECISIONS.md`). A dictation fired with text selected inserts normally and replaces it. The move off Right Cmd was forced by macOS 27 Siri claiming `RIGHT_COMMAND_TWICE` in its own hotkey vocabulary — disabled on the reference machine today, shipping in the system either way. Option-alone is not in that vocabulary; Siri's only Option entry is `HOLD_OPTION_SPACE`.
 
 ---
 
@@ -82,7 +84,7 @@ Learned by hitting all three on 2026-08-18, in slice 2. Every one of them produc
 
 **Launch with `open`, never by running the binary inside the bundle.** Running `.../Sotto.app/Contents/MacOS/Sotto` from a shell breaks TCC attribution, and the failure is silent in the worst way: `tapCreate` **succeeds** and the tap then receives no events. `open --env KEY=VAL` breaks it too; use `launchctl setenv` when a test needs a variable. Keep the posting process alive about a second after its last event — exiting immediately can drop it.
 
-**macOS's own dictation answers a held Right Command on the reference machine.** Found 2026-08-19: a hold produces text from the system as well as from Sotto, and the first symptom is text appearing *twice*, which reads as a duplicated insertion in Sotto's own pipeline. It is not — quit Sotto and the text still appears. Test with the double-tap latch, which the system does not claim. The product question this raises is Anthony's and is logged in `DECISIONS.md`.
+**macOS's own dictation answers a held Right Command on the reference machine — retired 2026-09-18, when Sotto stopped reading Right Cmd. Kept because it is the reason a “text appeared twice” report is not automatically Sotto's bug.** Found 2026-08-19: a hold produces text from the system as well as from Sotto, and the first symptom is text appearing *twice*, which reads as a duplicated insertion in Sotto's own pipeline. It is not — quit Sotto and the text still appears. Test with the double-tap latch, which the system does not claim. The product question this raises is Anthony's and is logged in `DECISIONS.md`.
 
 **Clear the device-dependent bit on a synthetic modifier *release*, or every gesture counts double.** Found 2026-09-01 while opening the overlay for a screenshot. §1's rule says to set `NX_DEVICERALTKEYMASK` (0x40) so the tap does not ignore the event, and it is easy to set it on both edges of the press — but `EventTap.swift` distinguishes a Right Option down from an up *only* by testing that bit, so a release still carrying it is read as a second down. A two-tap burst then arrives as four, and the overlay opens on taps 1–2 and closes again on 3–4. The symptom is an overlay that never appears, which reads as a dead tap or a missing grant; it is neither, and the giveaway is that a listen-only probe tap shows the events arriving perfectly. Down flags are `maskAlternate | 0x40`, up flags are `0`.
 
@@ -90,7 +92,7 @@ Learned by hitting all three on 2026-08-18, in slice 2. Every one of them produc
 
 **A tap that installs but sees nothing is a permissions problem until proven otherwise.** Check the grant before reading the state machine. Signing, the `tccutil` reset, and why Input Monitoring's pane stays empty are in the project memory rather than here, because they are facts about Anthony's machine rather than about Sotto.
 
-**No automated path can open the overlay — the double-tap needs Anthony's physical Right Option.** Burned an hour on 2026-09-02 trying every driver while the overlay sat closed: `osascript` `key code 61`, `CGEventPost` of flagsChanged with the correct `maskAlternate | 0x40` down flags from an ad-hoc CLI (sandboxed and not), and the desktop-control MCP's `key` — which has no right-side vocabulary at all, only left `option`. None reached the tap: the recognizer never logged a single `rightOptionDown`, exactly the "installs but sees nothing" signature of the permissions entry above — ad-hoc scripts have no TCC identity of their own to grant. A correct-looking synthetic burst that produces no gesture log line is the tell; do not re-derive the event shape, and do not tune `GestureRecognizer` on its account. Ask Anthony to tap, or test the code downstream of the gesture directly.
+**No automated path can fire a gesture — it needs Anthony's physical Right Option.** (Written for the overlay's double-tap; the overlay is gone and the finding transferred intact to dictation, which is now on the same key.) Burned an hour on 2026-09-02 trying every driver while the overlay sat closed: `osascript` `key code 61`, `CGEventPost` of flagsChanged with the correct `maskAlternate | 0x40` down flags from an ad-hoc CLI (sandboxed and not), and the desktop-control MCP's `key` — which has no right-side vocabulary at all, only left `option`. None reached the tap: the recognizer never logged a single `rightOptionDown`, exactly the "installs but sees nothing" signature of the permissions entry above — ad-hoc scripts have no TCC identity of their own to grant. A correct-looking synthetic burst that produces no gesture log line is the tell; do not re-derive the event shape, and do not tune `GestureRecognizer` on its account. Ask Anthony to tap, or test the code downstream of the gesture directly.
 
 ---
 
