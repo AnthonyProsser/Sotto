@@ -74,9 +74,12 @@ struct CleanupPropertyTests {
     }
 
     @Test func promptForbidsRewritingAndTranslating() {
+        // Overflow silently costs cleanup (4097 > 4096 seen at runtime), so the
+        // prompt stays short: ~4 chars/token puts 1,000 chars near 250 tokens.
+        #expect(Cleanup.instructions(for: DictationProfile(name: "Default")).count < 1000)
         let prompt = Cleanup.instructions(for: DictationProfile(name: "Default"))
-        #expect(prompt.contains("Never translate"))
-        #expect(prompt.contains("Never rephrase"))
+        #expect(prompt.contains("NEVER translate"))
+        #expect(prompt.contains("Change no other words"))
         #expect(prompt.contains("meet at four"))
     }
 
