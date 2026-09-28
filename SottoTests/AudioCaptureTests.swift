@@ -11,7 +11,8 @@ import Foundation
 import Testing
 @testable import Sotto
 
-@Suite(.serialized)
+extension SharedState {
+@Suite
 struct AudioCaptureTests {
     private static let key = "InputDeviceUID"
 
@@ -59,4 +60,5 @@ struct AudioCaptureTests {
         let id = try #require(AudioCapture.defaultInputDevice(), "no default input device")
         #expect(AudioCapture.inputDevices().contains { $0.id == id })
     }
+}
 }

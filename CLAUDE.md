@@ -224,7 +224,7 @@ Also gone: the Out-of-scope section, insert-mode in profiles, and the zero-outbo
 
 | | |
 |---|---|
-| Gestures | Hold **Right Option** → push-to-talk. Double-tap **Right Option** → latched. **Both are dictation and there is no third gesture** (2026-09-18). A dictation fired with text selected replaces the selection |
+| Gestures | Hold the dictation key (default **Right Option**, configurable from a short modifier-only list) → push-to-talk. Double-tap it → latched. **Both are dictation and there is no third gesture** (2026-09-18). A dictation fired with text selected replaces the selection |
 | STT | Apple `SpeechAnalyzer` / `SpeechTranscriber`, **the only v1 backend**; `DictationTranscriber` past its 30 locales. Runs on the ANE, shared with cleanup |
 | LLM | Apple `SystemLanguageModel`, for cleanup and nothing else. **No model list, no downloads, no MLX, no OpenAI-compatible adapter** (2026-09-18) |
 | VAD | `SpeechDetector`, preinstalled |

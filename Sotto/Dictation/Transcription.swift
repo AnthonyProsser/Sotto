@@ -223,6 +223,12 @@ actor Transcription {
         // never finalize, the `isFinal` filter in `drain` matches nothing, and
         // the import lands empty with no error anywhere.
         try await analyzer.start(inputAudioFile: analysis, finishAfterFile: true)
+        // `start` returns once the file is consumed, not once its results are
+        // delivered. `collectDraft`'s grace assumes finalize has returned (as in
+        // `finish()`); without this, a slow first transcription after launch
+        // (asset load, ANE shared with the cleanup prewarm) outlasts the 2 s
+        // grace, the collectors are cancelled, and the draft comes back empty.
+        try await analyzer.finalizeAndFinishThroughEndOfInput()
 
         var draft = try await collectDraft()
         // Locales are the configured locale, not a detection (§3.1) — same as
