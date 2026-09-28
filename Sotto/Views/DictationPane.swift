@@ -14,6 +14,7 @@ struct DictationPane: View {
     @Bindable private var store = ProfileStore.shared
 
     @State private var newTerm = ""
+    @AppStorage(DictationKey.defaultsKey) private var dictationKey = DictationKey.default
 
     var body: some View {
         Form {
@@ -22,6 +23,14 @@ struct DictationPane: View {
                     Label(reason, systemImage: "exclamationmark.triangle.fill")
                         .foregroundStyle(.secondary)
                 }
+            }
+
+            Section {
+                Picker("Dictation key", selection: $dictationKey) {
+                    ForEach(DictationKey.allCases) { Text($0.title).tag($0) }
+                }
+            } footer: {
+                Text("Hold to talk; double-tap to latch, tap once more to stop. Right Command can also start macOS's own dictation on some Macs.")
             }
 
             Section {
