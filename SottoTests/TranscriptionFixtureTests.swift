@@ -31,7 +31,8 @@ private func supported(_ identifier: String) async -> Bool {
     return speech != nil || dictation != nil
 }
 
-@Suite(.serialized)
+extension SharedState {
+@Suite
 struct TranscriptionFixtureTests {
 
     private func transcribe(_ fixture: String, locale: String) async throws -> Transcription.Draft {
@@ -73,4 +74,5 @@ struct TranscriptionFixtureTests {
         #expect(!draft.words.isEmpty)
         #expect(draft.locales.contains { $0.hasPrefix("es") })
     }
+}
 }

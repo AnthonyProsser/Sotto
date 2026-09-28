@@ -31,8 +31,8 @@ struct InsertionSpacingTests {
     }
 }
 
-@Suite(.serialized)
-@MainActor
+extension SharedState {
+@Suite @MainActor
 struct InsertionIntegrationTests {
 
     /// A key window with a focused text view, and the system-wide AX focus
@@ -46,6 +46,7 @@ struct InsertionIntegrationTests {
             contentRect: NSRect(x: 200, y: 200, width: 300, height: 100),
             styleMask: [.titled], backing: .buffered, defer: false
         )
+        window.isReleasedWhenClosed = false // ARC owns it; the default double-releases on close()
         window.contentView = textView
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
@@ -56,7 +57,7 @@ struct InsertionIntegrationTests {
             if focusedPID() == ProcessInfo.processInfo.processIdentifier { return (textView, window) }
             try await Task.sleep(for: .milliseconds(50))
         }
-        window.close()
+        window.orderOut(nil)
         throw FocusUnavailable()
     }
 
@@ -77,7 +78,7 @@ struct InsertionIntegrationTests {
     @Test(.enabled(if: AXIsProcessTrusted(), "test host has no Accessibility grant"))
     func insertsAtTheCaretWithALeadingSpace() async throws {
         let (view, window) = try await focusedTextView("hello")
-        defer { window.close() }
+        defer { window.orderOut(nil) }
         let outcome = Insertion.insert("world")
         guard case .inserted = outcome else {
             Issue.record("expected .inserted, got \(outcome)")
@@ -89,11 +90,12 @@ struct InsertionIntegrationTests {
     @Test(.enabled(if: AXIsProcessTrusted(), "test host has no Accessibility grant"))
     func noSpaceAgainstAnOpener() async throws {
         let (view, window) = try await focusedTextView("say (")
-        defer { window.close() }
+        defer { window.orderOut(nil) }
         guard case .inserted = Insertion.insert("hi") else {
             Issue.record("expected .inserted")
             return
         }
         #expect(view.string == "say (hi")
     }
+}
 }

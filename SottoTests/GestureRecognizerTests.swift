@@ -202,14 +202,19 @@ struct GestureRecognizerTests {
         h.send(.rightOptionUp)
         #expect(h.take() == [.arm, .pushToTalk, .abort]) // No .stop.
     }
+}
 
+extension SharedState {
+@Suite @MainActor
+struct EscapePriorityTwoTests {
     // MARK: - Escape (priority 2)
 
     /// The arbiter itself (`EventTap.handle`) needs a live CGEventTap and is a
     /// manual check. What is testable without one: priority 2 declines when no
     /// transcription is in flight, which is what stops a bare Escape from doing
     /// anything to an idle Sotto.
-    @Test @MainActor func cancelTranscriptionDeclinesWhenNothingIsInFlight() {
+    @Test func cancelTranscriptionDeclinesWhenNothingIsInFlight() {
         #expect(Dictation.shared.cancelTranscription() == false)
     }
+}
 }
