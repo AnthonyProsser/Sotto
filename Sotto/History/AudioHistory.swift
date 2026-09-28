@@ -25,7 +25,7 @@ nonisolated enum AudioHistory {
     /// wanted as a corpus for improving the dictation path, and §4.3's calibration
     /// already reads them — a ring that throws the tenth away is deleting the data
     /// the feature is for. Still configurable, and the setting is in
-    /// Settings → Dictation.
+    /// Settings → General.
     ///
     /// Opus at 24 kbps is ~0.18 MB/min, so unbounded is ~1 GB per 100 hours.
     static let defaultRingLimit = 0
@@ -48,7 +48,9 @@ nonisolated enum AudioHistory {
     static func record(
         draft: Transcription.Draft,
         buffers: [AVAudioPCMBuffer],
-        format: AVAudioFormat
+        format: AVAudioFormat,
+        cleaned: String? = nil,
+        profile: String? = nil
     ) {
         let enabled = (UserDefaults.standard.object(forKey: enabledKey) as? Bool) ?? true
         let limit = (UserDefaults.standard.object(forKey: ringLimitKey) as? Int) ?? defaultRingLimit
@@ -60,7 +62,9 @@ nonisolated enum AudioHistory {
                     format: format,
                     to: root,
                     enabled: enabled,
-                    ringLimit: limit
+                    ringLimit: limit,
+                    cleaned: cleaned,
+                    profile: profile
                 )
                 await MainActor.run {
                     NotificationCenter.default.post(name: .audioHistoryDidChange, object: nil)
@@ -80,7 +84,9 @@ nonisolated enum AudioHistory {
         to root: URL,
         enabled: Bool = true,
         ringLimit: Int = defaultRingLimit,
-        now: Date = Date()
+        now: Date = Date(),
+        cleaned: String? = nil,
+        profile: String? = nil
     ) throws -> URL? {
         guard enabled else { return nil }
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -96,8 +102,8 @@ nonisolated enum AudioHistory {
             created: now,
             pinned: false,
             raw: mark(draft.text, words: draft.words, pauses: draft.pauses),
-            cleaned: nil,
-            profile: nil,
+            cleaned: cleaned,
+            profile: profile,
             locales: draft.locales,
             words: draft.words,
             pauses: draft.pauses

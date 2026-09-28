@@ -189,6 +189,29 @@ struct HistoryTests {
         )
         #expect(marked == "hello there [pause 500ms] how are you")
     }
+
+    /// Slice 11 fills the two slots slice 5 left empty: the cleaned text and
+    /// the profile that produced it round-trip through the sidecar.
+    @Test func saveStoresCleanedAndProfile() throws {
+        let root = scratch()
+        let buffer = sine(seconds: 2)
+        let draft = Transcription.Draft(
+            text: "hello there",
+            words: [.init(text: "hello", start: 0.10), .init(text: "there", start: 0.40)],
+            pauses: []
+        )
+        let url = try #require(try AudioHistory.save(
+            draft: draft,
+            buffers: [buffer],
+            format: buffer.format,
+            to: root,
+            cleaned: "Hello there.",
+            profile: "Writing"
+        ))
+        let entry = try AudioHistory.load(from: url)
+        #expect(entry.cleaned == "Hello there.")
+        #expect(entry.profile == "Writing")
+    }
 }
 
 // MARK: - Fixtures

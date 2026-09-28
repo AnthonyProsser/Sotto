@@ -72,7 +72,7 @@ This is one of the four cross-slice threads; see `.claude/rules/slices.md`.
 | Hold **Right Option** | Push-to-talk dictation |
 | Double-tap **Right Option** | Latched dictation; a third tap stops it |
 
-**There is no third gesture, and selection no longer routes anywhere** (2026-09-18, `DECISIONS.md`). A dictation fired with text selected inserts normally and replaces it. The move off Right Cmd was forced by macOS 27 Siri claiming `RIGHT_COMMAND_TWICE` in its own hotkey vocabulary — disabled on the reference machine today, shipping in the system either way. Option-alone is not in that vocabulary; Siri's only Option entry is `HOLD_OPTION_SPACE`.
+**There is no third gesture, and selection no longer routes anywhere** (2026-09-18, `DECISIONS.md`). A dictation fired with text selected inserts normally and replaces it. The move off Right Cmd was once credited to macOS 27 Siri claiming `RIGHT_COMMAND_TWICE`; **that claim is withdrawn** (2026-09-28, `DECISIONS.md`) — Anthony: the binding was macOS 26's, not 27's. Right Option stays the default because the overlay freed it, and the key is now a pick from a short modifier-only list.
 
 ---
 

@@ -171,9 +171,69 @@ actor Transcription {
     /// is what turns the last volatile span into a finalized result, so the draft
     /// is only complete after it returns.
     func finish() async throws -> Draft {
-        defer { teardown() }
-        guard let analyzer, let collector else { throw Failure.notPrepared }
+        guard let analyzer else { throw Failure.notPrepared }
         try await analyzer.finalizeAndFinishThroughEndOfInput()
+        return try await collectDraft()
+    }
+
+    /// Slice 14. A file off disk through the same modules as a dictation.
+    /// Returns the draft plus the analyzed audio as buffers, so the caller
+    /// stores exactly what was transcribed. Anything AVFoundation reads is
+    /// accepted (m4a, mp3, wav, aac); a format the analyzer does not want is
+    /// converted through a temp file first.
+    func transcribeFile(_ source: URL) async throws -> (
+        draft: Draft, buffers: [AVAudioPCMBuffer], format: AVAudioFormat
+    ) {
+        if kind == nil { await prepare() }
+        guard kind != nil else { throw Failure.notPrepared }
+
+        let engine = kind!.makeEngine()
+        self.engine = engine
+        let detector = SpeechDetector(
+            detectionOptions: .init(sensitivityLevel: .medium),
+            reportResults: true
+        )
+        self.detector = detector
+
+        let target = await SpeechAnalyzer.bestAvailableAudioFormat(
+            compatibleWith: [engine.module, detector]
+        ) ?? format ?? AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: 16_000,
+            channels: 1,
+            interleaved: false
+        )!
+        let analysisURL = try Self.analysisFile(for: source, target: target)
+        defer {
+            if analysisURL != source {
+                try? FileManager.default.removeItem(at: analysisURL)
+            }
+        }
+        let analysis = try AVAudioFile(forReading: analysisURL)
+
+        let analyzer = SpeechAnalyzer(modules: [engine.module, detector])
+        self.analyzer = analyzer
+        collector = Task { try await engine.collect() }
+        pauseCollector = Task { try await Self.collectPauses(detector) }
+        // `finishAfterFile` is the whole point: without it the file's results
+        // never finalize, the `isFinal` filter in `drain` matches nothing, and
+        // the import lands empty with no error anywhere.
+        try await analyzer.start(inputAudioFile: analysis, finishAfterFile: true)
+
+        var draft = try await collectDraft()
+        // Locales are the configured locale, not a detection (§3.1) — same as
+        // the microphone path, which reads them off the live module.
+        draft.locales = engine.selectedLocales
+        let buffers = try Self.readFully(analysis)
+        return (draft, buffers, analysis.processingFormat)
+    }
+
+    /// The tail both inputs share: the microphone path calls it after finalize
+    /// returns, the file path after the sequence is consumed. Bounded wait on
+    /// the result sequences (§1.0), then the draft. Owns teardown.
+    private func collectDraft() async throws -> Draft {
+        defer { teardown() }
+        guard let collector else { throw Failure.notPrepared }
 
         // **The modules' result sequences do not reliably end when the analyzer
         // does, and the two `await`s below are the only unbounded waits in a
@@ -250,6 +310,79 @@ actor Transcription {
         pauseCollector = nil
         engine = nil
         detector = nil
+    }
+
+    // MARK: - File helpers
+
+    /// The source itself when the analyzer accepts its format, else a
+    /// same-content temp file at the analyzer's format. The caller deletes the
+    /// temp file; comparing sample rate and channels is the whole gate, because
+    /// those are what make an analyzer reject an input.
+    private static func analysisFile(for source: URL, target: AVAudioFormat) throws -> URL {
+        let file = try AVAudioFile(forReading: source)
+        let actual = file.processingFormat
+        if actual.sampleRate == target.sampleRate,
+           actual.channelCount == target.channelCount
+        {
+            return source
+        }
+        let temp = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("caf")
+        guard let converter = AVAudioConverter(from: actual, to: target) else {
+            return source
+        }
+        let out = try AVAudioFile(
+            forWriting: temp,
+            settings: target.settings,
+            commonFormat: target.commonFormat,
+            interleaved: target.isInterleaved
+        )
+        file.framePosition = 0
+        while file.framePosition < file.length {
+            let remaining = file.length - file.framePosition
+            let capacity = AVAudioFrameCount(min(remaining, 480_000))
+            guard let input = AVAudioPCMBuffer(pcmFormat: actual, frameCapacity: capacity) else { break }
+            try file.read(into: input)
+            guard input.frameLength > 0 else { break }
+            guard let converted = AVAudioPCMBuffer(
+                pcmFormat: target,
+                frameCapacity: AVAudioFrameCount(Double(input.frameLength) * target.sampleRate / actual.sampleRate + 16)
+            ) else { break }
+            var consumed = false
+            var convertError: NSError?
+            converter.convert(to: converted, error: &convertError) { _, status in
+                if consumed {
+                    status.pointee = .noDataNow
+                    return nil
+                }
+                consumed = true
+                status.pointee = .haveData
+                return input
+            }
+            if convertError != nil { break }
+            try out.write(from: converted)
+        }
+        return temp
+    }
+
+    /// Whole file as buffers, in segments so an hour-long import never asks for
+    /// one giant buffer. The caller feeds these to the Opus write.
+    private static func readFully(_ file: AVAudioFile) throws -> [AVAudioPCMBuffer] {
+        file.framePosition = 0
+        var buffers: [AVAudioPCMBuffer] = []
+        while file.framePosition < file.length {
+            let remaining = file.length - file.framePosition
+            let capacity = AVAudioFrameCount(min(remaining, 480_000))
+            guard let buffer = AVAudioPCMBuffer(
+                pcmFormat: file.processingFormat,
+                frameCapacity: capacity
+            ) else { break }
+            try file.read(into: buffer)
+            guard buffer.frameLength > 0 else { break }
+            buffers.append(buffer)
+        }
+        return buffers
     }
 
     // MARK: - The two transcribers

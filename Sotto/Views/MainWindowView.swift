@@ -147,18 +147,7 @@ struct MainWindowView: View {
             case .dictation:
                 DictationPane()
             case .general:
-                // Still a stub, and honestly so: §8.4's single updates row is the
-                // whole of General, and the updater itself is a stub menu item.
-                // A pane holding one control that does nothing is worse than one
-                // that says there is nothing here yet.
-                ContentUnavailableView(
-                    state.settingsSection.title,
-                    systemImage: state.settingsSection.symbol
-                )
-                // Every settings pane names the window, or the Audio title (and
-                // subtitle) it replaced leaks through.
-                .navigationTitle(state.settingsSection.title)
-                .navigationSubtitle("")
+                GeneralPane()
             }
         } else {
             AudioDetail(library: library)

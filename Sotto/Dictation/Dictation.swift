@@ -172,14 +172,37 @@ final class Dictation {
             do {
                 let draft = try await Transcription.shared.finish()
                 let recording = AudioCapture.shared.takeRecording()
-                deliver(draft)
+                let profile = ProfileStore.shared.active
+                var text = draft.text
+                var cleaned: String?
+                var cleanupFailed = false
+                if profile.cleanupEnabled, !draft.text.isEmpty {
+                    let marked = AudioHistory.mark(draft.text, words: draft.words, pauses: draft.pauses)
+                    do {
+                        let result = try await Cleanup.shared.clean(marked, profile: profile)
+                        if !result.isEmpty {
+                            text = result
+                            cleaned = result
+                        }
+                    } catch Cleanup.Failure.unavailable {
+                        // Configuration state, not a failure: the banner in
+                        // Settings → Dictation owns it, and the dictation
+                        // proceeds like a cleanup-off profile.
+                    } catch {
+                        log.error("Cleanup failed: \(error.localizedDescription, privacy: .public)")
+                        cleanupFailed = true
+                    }
+                }
                 if let recording, !draft.text.isEmpty {
                     AudioHistory.record(
                         draft: draft,
                         buffers: recording.buffers,
-                        format: recording.format
+                        format: recording.format,
+                        cleaned: cleaned,
+                        profile: profile.name
                     )
                 }
+                deliver(text, cleanupFailed: cleanupFailed)
             } catch {
                 AudioCapture.shared.discardRecording()
                 // **A cancelled pipeline is not a failed one.** Escape (either
@@ -243,18 +266,21 @@ final class Dictation {
     /// gone, so the transcript takes the ordinary path and the AX write replaces
     /// whatever was selected. This contradicts §4.9's "selected text is never a
     /// dictation target" — his call, logged, and the spec copy is stale on it.
-    private func deliver(_ draft: Transcription.Draft) {
-        guard !draft.text.isEmpty else {
+    private func deliver(_ text: String, cleanupFailed: Bool) {
+        guard !text.isEmpty else {
             log.notice("Nothing transcribed.")
             finish(with: nil)
             return
         }
 
-        switch Insertion.insert(draft.text) {
+        // A failed cleanup must not take the dictation with it: the raw text
+        // is what gets inserted, and the HUD says the pass failed.
+        let failure: HUDState? = cleanupFailed ? .error("Cleanup failed") : nil
+        switch Insertion.insert(text) {
         case .inserted:
-            finish(with: nil)
+            finish(with: failure)
         case .copied:
-            finish(with: .message("Copied to clipboard"))
+            finish(with: failure ?? .message("Copied to clipboard"))
         case .failed(let reason):
             finish(with: .error(reason))
         }

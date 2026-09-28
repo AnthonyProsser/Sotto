@@ -54,7 +54,7 @@ Do not build past one of these without asking — `.claude/rules/open-questions.
 | **3** | The **HUD's** anchor — the 8 % top offset, value or rule (gap 2). Slice 3 builds the HUD panel, so it has to be positioned here |
 | **9** | The **overlay's** anchor — the 118 pt bottom offset, value or rule (gap 2) |
 | **10** | ~~Decision 04's shape, three-way (gap 1)~~ — **closed 2026-08-27**: Frame 2's right-docked 560 pt column |
-| **11** | Cleanup reasoning toggle and default (issue 4) |
+| **11** | ~~Cleanup reasoning toggle and default (issue 4)~~ — **closed 2026-09-28**, no toggle |
 | **12** | MCP Swift SDK vs. protocol version (issue 1) — **decide before the first line** |
 | Any | ~~Focus change mid-transcription (issue 3)~~ — **closed 2026-08-27: the clipboard**, `rules/input-and-insertion.md` §6. Issue 2 closed — all SwiftUI |
 
@@ -83,7 +83,7 @@ Do not build past one of these without asking — `.claude/rules/open-questions.
 - **Obsidian is not a feature** (`DECISIONS.md`, 2026-08-19). The chat writer is `chat.md` + `attachments/` because that is the data, not because of a vault. No sample vault, no Obsidian check. The writer ships with no caller; slice 9 is the first real chat.
 - **Audio entries are a folder with `audio.caf` (Opus @ 24 kbps) and pretty-printed `entry.json`.** Inspectable in any text reader. Pin, configurable ring, and **"never delete" (limit 0) is now the default** — 2026-09-18, `DECISIONS.md`, superseding the ring of 8/10.
 - **`cleaned` and `profile` are empty slots.** Do not invent values. Slice 11 fills them — see the Slice 11 amendment below. **The third slot is `locales`, not `languages`, and it is no longer empty**: it is written from `SpeechAnalyzer`'s resolved locale at the end of every dictation, because Apple Speech does not detect language (2026-09-18, `DECISIONS.md`).
-- **`AudioHistoryEnabled` and `AudioHistoryRingLimit` now have a control** — `Sotto/Views/DictationPane.swift`, bound with `@AppStorage` to the same keys. Do not add a second reader.
+- **`AudioHistoryEnabled` and `AudioHistoryRingLimit` now have a control** — `Sotto/Views/GeneralPane.swift`, bound with `@AppStorage` to the same keys. Do not add a second reader. (Moved from `DictationPane` 2026-09-24, `DECISIONS.md`.)
 
 ### Slice 6 — Audio workspace
 

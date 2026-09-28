@@ -80,6 +80,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         AudioCapture.shared.selectedDevice = AudioCapture.inputDevices().first { $0.id == id }
     }
 
+    /// The Profile submenu (§8.1, §10.1). `representedObject` is the profile id;
+    /// Settings owns the list itself, so an id naming a deleted profile is
+    /// ignored rather than repaired here.
+    @IBAction func selectProfile(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? String,
+              ProfileStore.shared.profiles.contains(where: { $0.id == id })
+        else { return }
+        ProfileStore.shared.activeID = id
+    }
+
     /// `Cmd+,` from the app menu, and **Settings…** in the menu bar menu. Settings
     /// is a page inside the main window rather than a window of its own, so this
     /// toggles rather than opens — press it again and you are back where you were
