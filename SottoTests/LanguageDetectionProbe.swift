@@ -315,7 +315,7 @@ private func runOnce(
 
 // MARK: - Fixtures
 
-private func loadBuffers(_ url: URL, target: AVAudioFormat) throws -> [AVAudioPCMBuffer] {
+func loadBuffers(_ url: URL, target: AVAudioFormat) throws -> [AVAudioPCMBuffer] {
     let file = try AVAudioFile(forReading: url)
     let src = file.processingFormat
     let chunk = AVAudioFrameCount(target.sampleRate / 10)   // 100 ms, like capture

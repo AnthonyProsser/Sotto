@@ -159,7 +159,8 @@ final class Cleanup {
         (a question mark when the sentence asks something). Every sentence \
         starts with a capital letter. Fix capitalisation elsewhere. Remove the \
         [pause Nms] markers themselves from the \
-        output. Preserve the speaker's words and meaning in everything else.
+        output. Preserve the speaker's words and meaning in everything else, and keep the \
+        transcript in the language it was dictated in: NEVER translate.
         """
         if !profile.cleanupInstructions.isEmpty {
             text += "\n\nAdditional instructions for this profile: \(profile.cleanupInstructions)"

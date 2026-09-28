@@ -91,6 +91,16 @@ struct DictationPane: View {
             }
 
             Section {
+                Picker("Language", selection: profile.language) {
+                    ForEach(DictationProfile.Language.allCases, id: \.self) { Text($0.label).tag($0) }
+                }
+            } header: {
+                Text("Language")
+            } footer: {
+                Text("Detect listens for English and Spanish at once and inserts whichever it heard. It costs a little extra latency on every dictation.")
+            }
+
+            Section {
                 Toggle("Cleanup enabled", isOn: profile.cleanupEnabled)
 
                 TextField(

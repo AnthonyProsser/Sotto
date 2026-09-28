@@ -99,7 +99,7 @@ The HUD reports through the idle / not-idle signal, one of the four cross-slice 
 
 **Fill `AudioEntry.cleaned` and `.profile` in this slice.** Slice 5 writes them empty so the sidecar shape is already honest. Cleanup produces `cleaned`; the active profile's name is `profile`. The type lives in `Sotto/History/AudioHistory.swift`.
 
-**The third slot is no longer yours, and it is no longer called `languages`** (2026-09-18, `DECISIONS.md`). **Apple Speech does not detect language at all**, so there was never a source to pick — the field was renamed to `locales` and is written at the end of every dictation from `LocaleDependentSpeechModule.selectedLocales`, which is the framework stating what it resolved to. It is an array because Apple's own property is, not because anything listens to more than one: both transcribers take a singular `init(locale:)` and `selectedLocales` is get-only, so it holds exactly one element today. **Do not build multi-locale listening on the strength of the plural**, and do not migrate the pre-rename entries that decode with `locales == []` — the old value was never a detection.
+**The third slot is `locales`, and it is the winner's locale** (2026-09-18 rename; detection 2026-09-28, `DECISIONS.md`). Apple Speech does not detect language, so Sotto does: under a profile's **Detect** (the default; Always English / Always Spanish are the overrides) a recording runs **two separate analyzers, en_US and es_ES**, each with a fresh module, on the same capture buffers, both to completion (no early cancel, no confidence comparison — the es model is confident on English words). **Spanish wins only if `NLLanguageRecognizer`, constrained to [en, es], gives the es transcript P(es) ≥ 0.8; otherwise English** (`Transcription.prefersSpanish`). `SpeechDetector` rides the English lane only. `locales` is read off the winning module's `selectedLocales`. Both locales are reserved at launch and never downloaded; a missing one degrades Detect to the other. **Still one locale per module** — this is two listeners and a pick, not multi-locale listening, and a `say`-audio result is a floor.
 
 ---
 
@@ -151,7 +151,7 @@ try await analyzer.finalizeAndFinishThroughEndOfInput()
 
 | | |
 |---|---|
-| STT | **Apple `SpeechAnalyzer` / `SpeechTranscriber`, exclusively** (2026-08-19). `DictationTranscriber` past its 30 locales. **No non-Apple backend ships in v1** — Parakeet TDT v3, FluidAudio, and Whisper are all out |
+| STT | **Apple `SpeechAnalyzer` / `SpeechTranscriber`, exclusively** (2026-08-19); en/es Detect per §3.1 (2026-09-28). `DictationTranscriber` past its 30 locales. **No non-Apple backend ships in v1** — Parakeet TDT v3, FluidAudio, and Whisper are all out |
 | VAD | **`SpeechDetector`**, preinstalled, wired in slice 5. Silero retired with the Parakeet path |
 | Compute | **ANE, shared with Foundation Models.** Mic-rate STT may overlap cleanup freely; the import-rate serialisation rule lost its subject 2026-09-18 (§1.0) |
 | Storage | Audio as Opus @ 24 kbps in CAF (`audio.caf` + `entry.json`). Obsidian is not a feature |
