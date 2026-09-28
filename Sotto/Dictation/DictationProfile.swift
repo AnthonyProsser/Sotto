@@ -5,8 +5,8 @@
 //  Slice 11. All dictation settings live in profiles — sotto-spec.md §8.1, as
 //  trimmed by DECISIONS.md: no STT picker (Apple Speech only), no cleanup model
 //  picker (SystemLanguageModel or off), no context slider (the Apple model has no
-//  weights or KV for an estimate), no language picker (the locale resolves from
-//  the system). What remains: cleanup on/off, reasoning, instructions, vocabulary.
+//  weights or KV for an estimate), language is Detect / Always English / Always Spanish
+//  (DECISIONS.md, 2026-09-28). What remains: language, cleanup on/off, instructions, vocabulary.
 //
 
 import Foundation
@@ -32,18 +32,47 @@ struct DictationProfile: Codable, Sendable, Identifiable, Equatable {
     /// (DECISIONS.md) — which is also why it does nothing when cleanup is off.
     var vocabulary: [String]
 
+    /// Which locales a dictation listens for (`DECISIONS.md`, 2026-09-28). Detect
+    /// runs English and Spanish and picks by the text; the others run one.
+    enum Language: String, Codable, CaseIterable, Sendable {
+        case detect, english, spanish
+
+        var label: String {
+            switch self {
+            case .detect: "Detect"
+            case .english: "Always English"
+            case .spanish: "Always Spanish"
+            }
+        }
+    }
+
+    var language: Language
+
     init(
         id: String = UUID().uuidString,
         name: String,
+        language: Language = .detect,
         cleanupEnabled: Bool = true,
         cleanupInstructions: String = "",
         vocabulary: [String] = []
     ) {
         self.id = id
         self.name = name
+        self.language = language
         self.cleanupEnabled = cleanupEnabled
         self.cleanupInstructions = cleanupInstructions
         self.vocabulary = vocabulary
+    }
+
+    /// Profiles saved before `language` existed decode as Detect.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        name = try c.decode(String.self, forKey: .name)
+        language = try c.decodeIfPresent(Language.self, forKey: .language) ?? .detect
+        cleanupEnabled = try c.decode(Bool.self, forKey: .cleanupEnabled)
+        cleanupInstructions = try c.decode(String.self, forKey: .cleanupInstructions)
+        vocabulary = try c.decode([String].self, forKey: .vocabulary)
     }
 }
 

@@ -41,4 +41,27 @@ say -v Samantha -o "$tmp/vocab.aiff" \
   "Please ask Quenthara to book the Zorbelix conference room for Friday."
 caf "$tmp/vocab.aiff" en-vocab.caf
 
+# Language-detection spike set (LanguageDetectionProbe): short sentences, two or three
+# voices per language, each language with a 2-3 word utterance (the hard case).
+# name|voice|text
+sentences=(
+  "en-q1|Samantha|Please send me the quarterly report by Friday."
+  "en-q2|Daniel|I think we should move the meeting to Thursday afternoon because half the team is travelling."
+  "en-q3|Reed (English (US))|The new build is ready for testing."
+  "en-short1|Samantha|Sounds good, thanks."
+  "en-short2|Daniel|Call me later."
+  "en-long|Samantha|When you get a chance, could you look over the draft and let me know whether the second section makes sense, since I want to send it to the client before the end of the day."
+  "es-q1|Mónica|Por favor envíame el informe trimestral antes del viernes."
+  "es-q2|Paulina|Creo que deberíamos mover la reunión al jueves por la tarde porque la mitad del equipo está de viaje."
+  "es-q3|Reed (Spanish (Mexico))|La nueva versión está lista para las pruebas."
+  "es-short1|Mónica|Suena bien, gracias."
+  "es-short2|Paulina|Llámame luego."
+  "es-long|Mónica|Cuando tengas un momento, ¿podrías revisar el borrador y decirme si la segunda sección tiene sentido? Quiero enviarlo al cliente antes de que termine el día."
+)
+for row in "${sentences[@]}"; do
+  name=${row%%|*}; rest=${row#*|}; voice=${rest%%|*}; text=${rest#*|}
+  say -v "$voice" -o "$tmp/$name.aiff" "$text"
+  caf "$tmp/$name.aiff" "$name.caf"
+done
+
 ls -l *.caf

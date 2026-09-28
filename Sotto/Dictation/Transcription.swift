@@ -8,6 +8,7 @@
 import AVFoundation
 import CoreMedia
 import Foundation
+import NaturalLanguage
 import Speech
 import os
 
@@ -40,11 +41,24 @@ actor Transcription {
     /// setter, from `SpeechAnalyzer.prepareModulesIfNeeded()`, reproduced on the
     /// second dictation of every launch (2026-08-19). A module belongs to one
     /// analyzer for its lifetime.
-    private var engine: Engine?
+    ///
+    /// **One lane, or two under Detect** (`DECISIONS.md`, 2026-09-28): a lane is a
+    /// module, its own analyzer, and its collector. Detect runs an English and a
+    /// Spanish lane on the same buffers to completion; the detector rides the
+    /// first lane only, since pauses do not depend on the locale.
+    private var lanes: [Lane] = []
     private var detector: SpeechDetector?
-    private var analyzer: SpeechAnalyzer?
-    private var collector: Task<Draft, Error>?
     private var pauseCollector: Task<[Draft.Pause], Error>?
+    private var feeder: Task<Void, Never>?
+    /// English and Spanish, reserved at launch when the machine already has them.
+    private var enKind: Kind?
+    private var esKind: Kind?
+
+    private struct Lane {
+        let engine: Engine
+        let analyzer: SpeechAnalyzer
+        let collector: Task<Draft, Error>
+    }
 
     private init() {}
 
@@ -71,10 +85,11 @@ actor Transcription {
         var words: [Word]
         var pauses: [Pause]
 
-        /// **What the transcriber was listening for, not what it heard.** Apple's
-        /// Speech framework does not detect language — it transcribes in the
-        /// locale the module was built with, so a "detected languages" field
-        /// would be a fiction (Anthony, 2026-09-18, `DECISIONS.md`).
+        /// **The locale of the transcript that won, read off the module that
+        /// produced it.** Apple's Speech framework does not detect language;
+        /// Sotto's Detect mode runs English and Spanish and picks by the text
+        /// (`DECISIONS.md`, 2026-09-28), so under Detect this is the pick and
+        /// under Always English / Spanish it is the setting.
         ///
         /// Plural because `LocaleDependentSpeechModule.selectedLocales` is
         /// plural, and this is read straight off it rather than reconstructed.
@@ -119,16 +134,22 @@ actor Transcription {
             // A module built only to be asked two questions and thrown away; it
             // never meets an analyzer, so the one-analyzer rule above is intact.
             let probe = kind.makeEngine().module
-            // Preinstalled. Included so the format we cache is one both
-            // modules will accept; a detector-incompatible format would
-            // make pause collection fail on every recording.
-            let detector = SpeechDetector()
             guard await AssetInventory.status(forModules: [probe]) == .installed else {
                 throw Failure.localeNotInstalled(kind.locale)
             }
-            format = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [probe, detector])
+            // English and Spanish for Detect, and for the Always-X settings.
+            // Reserve only — a locale the machine does not already have is
+            // skipped, never downloaded (§2's consent rule).
+            enKind = await reserveIfInstalled("en_US")
+            esKind = await reserveIfInstalled("es_ES")
+            // Preinstalled. Included so the format we cache is one every
+            // module will accept; a detector-incompatible format would
+            // make pause collection fail on every recording.
+            let modules = [probe] + [enKind, esKind].compactMap { $0?.makeEngine().module }
+            let detector = SpeechDetector()
+            format = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: modules + [detector])
             if format == nil {
-                format = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [probe])
+                format = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: modules)
             }
             self.kind = kind
             log.notice("""
@@ -140,6 +161,18 @@ actor Transcription {
         }
     }
 
+    private func reserveIfInstalled(_ identifier: String) async -> Kind? {
+        guard let match = await SpeechTranscriber.supportedLocale(equivalentTo: Locale(identifier: identifier)),
+              (try? await AssetInventory.reserve(locale: match)) != nil
+        else { return nil }
+        let kind = Kind.speech(match)
+        guard await AssetInventory.status(forModules: [kind.makeEngine().module]) == .installed else {
+            log.error("\(identifier, privacy: .public) is not installed; not offered to dictation.")
+            return nil
+        }
+        return kind
+    }
+
     /// The format the analyzer wants, for `AudioCapture` to convert into.
     func audioFormat() -> AVAudioFormat? { format }
 
@@ -147,12 +180,11 @@ actor Transcription {
 
     /// Start analysing. Returns as soon as the analyzer is running; the results
     /// accumulate in the background until `finish()` or `cancel()`.
-    func begin(_ inputs: AsyncStream<AnalyzerInput>) async throws {
+    func begin(_ inputs: AsyncStream<AnalyzerInput>, language: DictationProfile.Language = .detect) async throws {
         if kind == nil { await prepare() }
         guard let kind else { throw Failure.notPrepared }
 
-        let engine = kind.makeEngine()
-        self.engine = engine
+        let kinds = try kinds(for: language, fallback: kind)
         // Fresh module per recording, same rule as the transcriber. `reportResults`
         // is what fills `results`; the convenience init does not.
         let detector = SpeechDetector(
@@ -160,20 +192,83 @@ actor Transcription {
             reportResults: true
         )
         self.detector = detector
-        let analyzer = SpeechAnalyzer(modules: [engine.module, detector])
-        self.analyzer = analyzer
-        collector = Task { try await engine.collect() }
+        lanes = kinds.enumerated().map { makeLane($1.makeEngine(), detector: $0 == 0 ? detector : nil) }
         pauseCollector = Task { try await Self.collectPauses(detector) }
-        try await analyzer.start(inputSequence: inputs)
+        // A second analyzer needs its own stream; `AnalyzerInput` shares the buffer.
+        let streams = fanOut(inputs, to: lanes.count)
+        for (lane, stream) in zip(lanes, streams) {
+            try await lane.analyzer.start(inputSequence: stream)
+        }
     }
 
     /// Called once the capture stream has finished. `finalizeAndFinishThroughEndOfInput`
     /// is what turns the last volatile span into a finalized result, so the draft
     /// is only complete after it returns.
     func finish() async throws -> Draft {
-        guard let analyzer else { throw Failure.notPrepared }
-        try await analyzer.finalizeAndFinishThroughEndOfInput()
+        guard !lanes.isEmpty else { throw Failure.notPrepared }
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            for (i, lane) in lanes.enumerated() {
+                group.addTask {
+                    do { try await lane.analyzer.finalizeAndFinishThroughEndOfInput() }
+                    // The primary lane's failure is the dictation's; a secondary
+                    // lane failing only costs the detection its second opinion.
+                    catch { if i == 0 { throw error } }
+                }
+            }
+            try await group.waitForAll()
+        }
         return try await collectDraft()
+    }
+
+    /// Which locales a recording runs, in lane order (English first). Detect
+    /// degrades to whatever of English and Spanish is installed, and leaves a
+    /// system locale that is neither alone rather than forcing it onto en/es.
+    private func kinds(for language: DictationProfile.Language, fallback: Kind) throws -> [Kind] {
+        switch language {
+        case .english:
+            guard let enKind else { throw Failure.localeNotInstalled(Locale(identifier: "en_US")) }
+            return [enKind]
+        case .spanish:
+            guard let esKind else { throw Failure.localeNotInstalled(Locale(identifier: "es_ES")) }
+            return [esKind]
+        case .detect:
+            let code = fallback.locale.language.languageCode
+            let pair = [enKind, esKind].compactMap { $0 }
+            return pair.isEmpty || (code != "en" && code != "es") ? [fallback] : pair
+        }
+    }
+
+    private func makeLane(_ engine: Engine, detector: SpeechDetector?) -> Lane {
+        var modules: [any SpeechModule] = [engine.module]
+        if let detector { modules.append(detector) }
+        return Lane(
+            engine: engine,
+            analyzer: SpeechAnalyzer(modules: modules),
+            collector: Task { try await engine.collect() }
+        )
+    }
+
+    private func fanOut(_ inputs: AsyncStream<AnalyzerInput>, to count: Int) -> [AsyncStream<AnalyzerInput>] {
+        guard count > 1 else { return [inputs] }
+        let pairs = (0..<count).map { _ in AsyncStream<AnalyzerInput>.makeStream() }
+        feeder = Task {
+            for await input in inputs { pairs.forEach { $0.continuation.yield(input) } }
+            pairs.forEach { $0.continuation.finish() }
+        }
+        return pairs.map(\.stream)
+    }
+
+    /// **The Detect rule** (`DECISIONS.md`, 2026-09-28): Spanish only when the
+    /// on-device language recognizer, constrained to English and Spanish, gives
+    /// the *Spanish* transcript P(es) of at least 0.8; otherwise English. Model
+    /// confidence was rejected — the Spanish model is confident on English words.
+    nonisolated static func prefersSpanish(_ text: String) -> Bool {
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return false }
+        let recognizer = NLLanguageRecognizer()
+        recognizer.languageConstraints = [.english, .spanish]
+        recognizer.processString(text)
+        return (recognizer.languageHypotheses(withMaximum: 2)[.spanish] ?? 0) >= 0.8
     }
 
     /// No UI caller: file import is out of v1 (`DECISIONS.md`, 2026-09-28). Kept as
@@ -192,7 +287,6 @@ actor Transcription {
         guard kind != nil else { throw Failure.notPrepared }
 
         let engine = kind!.makeEngine()
-        self.engine = engine
         let detector = SpeechDetector(
             detectionOptions: .init(sensitivityLevel: .medium),
             reportResults: true
@@ -215,9 +309,9 @@ actor Transcription {
         }
         let analysis = try AVAudioFile(forReading: analysisURL)
 
-        let analyzer = SpeechAnalyzer(modules: [engine.module, detector])
-        self.analyzer = analyzer
-        collector = Task { try await engine.collect() }
+        let lane = makeLane(engine, detector: detector)
+        let analyzer = lane.analyzer
+        lanes = [lane]
         pauseCollector = Task { try await Self.collectPauses(detector) }
         // `finishAfterFile` is the whole point: without it the file's results
         // never finalize, the `isFinal` filter in `drain` matches nothing, and
@@ -230,10 +324,7 @@ actor Transcription {
         // grace, the collectors are cancelled, and the draft comes back empty.
         try await analyzer.finalizeAndFinishThroughEndOfInput()
 
-        var draft = try await collectDraft()
-        // Locales are the configured locale, not a detection (§3.1) — same as
-        // the microphone path, which reads them off the live module.
-        draft.locales = engine.selectedLocales
+        let draft = try await collectDraft()
         let buffers = try Self.readFully(analysis)
         return (draft, buffers, analysis.processingFormat)
     }
@@ -243,7 +334,7 @@ actor Transcription {
     /// the result sequences (§1.0), then the draft. Owns teardown.
     private func collectDraft() async throws -> Draft {
         defer { teardown() }
-        guard let collector else { throw Failure.notPrepared }
+        guard !lanes.isEmpty else { throw Failure.notPrepared }
 
         // **The modules' result sequences do not reliably end when the analyzer
         // does, and the two `await`s below are the only unbounded waits in a
@@ -271,12 +362,25 @@ actor Transcription {
         }
         defer { forceEnd.cancel() }
 
-        var draft = try await collector.value
+        // Locales are read off each live module before `teardown()` fires in the
+        // defer above — the module is what holds the answer.
+        var drafts: [Draft] = []
+        for (i, lane) in lanes.enumerated() {
+            var d: Draft
+            if i == 0 {
+                d = try await lane.collector.value
+            } else if let other = try? await lane.collector.value {
+                d = other
+            } else {
+                continue
+            }
+            d.locales = lane.engine.selectedLocales
+            drafts.append(d)
+        }
+        // English is lane 0 under Detect; a lone lane is the answer as it stands.
+        var draft = drafts.count == 2 && Self.prefersSpanish(drafts[1].text) ? drafts[1] : drafts[0]
         // A detector failure must not take the transcript with it.
         draft.pauses = (try? await pauseCollector?.value) ?? []
-        // Before `teardown()` fires in the defer above — the module is what holds
-        // the answer, and it is gone a line later.
-        draft.locales = engine?.selectedLocales ?? []
         return draft
     }
 
@@ -300,25 +404,27 @@ actor Transcription {
         // called, because leaving an analyzer unfinished is worse than calling it,
         // but it is called *after* the cancels so that a hang inside it cannot
         // take the recovery with it.
-        collector?.cancel()
+        lanes.forEach { $0.collector.cancel() }
         pauseCollector?.cancel()
-        await analyzer?.cancelAndFinishNow()
+        feeder?.cancel()
+        for lane in lanes { await lane.analyzer.cancelAndFinishNow() }
     }
 
     /// Escape priority 2 (§10.4). Throws away whatever has been transcribed —
     /// cancelling a transcription is not a request for a partial one.
     func cancel() async {
-        await analyzer?.cancelAndFinishNow()
-        collector?.cancel()
+        feeder?.cancel()
+        for lane in lanes { await lane.analyzer.cancelAndFinishNow() }
+        lanes.forEach { $0.collector.cancel() }
         pauseCollector?.cancel()
         teardown()
     }
 
     private func teardown() {
-        analyzer = nil
-        collector = nil
+        lanes = []
+        feeder?.cancel()
+        feeder = nil
         pauseCollector = nil
-        engine = nil
         detector = nil
     }
 
