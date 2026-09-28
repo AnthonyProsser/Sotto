@@ -12,6 +12,7 @@
 import AVFoundation
 import Darwin
 import Foundation
+import NaturalLanguage
 import Speech
 import Testing
 import os
@@ -643,5 +644,112 @@ struct LanguageDetectionProbe {
             }
         }
         flush()
+    }
+
+    // MARK: - Text discriminator (post-hoc over dual traces)
+
+    private struct Obs {
+        let fixture: String, truth: String?, shape: String, rep: Int, words: Int
+        let conf: [String: Double], text: [String: String]
+        let nlEn: (en: Double, es: Double), nlEs: (en: Double, es: Double)
+        /// Each locale's own language on its own transcript.
+        var selfEn: Double { nlEn.en }
+        var selfEs: Double { nlEs.es }
+    }
+
+    private static func nl(_ text: String) -> (en: Double, es: Double) {
+        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty else { return (0, 0) }
+        let r = NLLanguageRecognizer()
+        r.languageConstraints = [.english, .spanish]
+        r.processString(t)
+        let h = r.languageHypotheses(withMaximum: 2)
+        return (h[.english] ?? 0, h[.spanish] ?? 0)
+    }
+
+    /// Dual only, file rate, no memory/early/real-time. Both shapes: one analyzer with
+    /// two modules (the shape to ship) and two analyzers (control), 3 reps each.
+    @Test
+    func probeLanguageDiscriminator() async throws {
+        var out = "Text discriminator — \(Date())\nNLLanguageRecognizer constrained to [en, es]; say audio is a floor.\n"
+        let header = await Self.assetHeader()
+        out += header.text
+        func flush() {
+            print(out)
+            try? out.write(toFile: outDir + "/lang-probe-discriminator.txt", atomically: true, encoding: .utf8)
+        }
+        guard header.ok, let target = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [makeModule(Self.en.locale)]) else {
+            out += "assets not installed, stopped\n"; flush(); return
+        }
+        let langs = [Self.en, Self.es]
+        var obs: [Obs] = []
+        for fx in fixtures {
+            let b = try loadBuffers(fixtureURL(fx.name + ".caf"), target: target)
+            _ = try await runOnce(fixture: fx.name, config: "warm", locales: langs, buffers: b, realtime: false, shared: true)
+            for shape in ["shared", "two"] {
+                for rep in 0..<3 {
+                    let r = try await runOnce(fixture: fx.name, config: shape, locales: langs, buffers: b, realtime: false, shared: shape == "shared")
+                    let te = r.texts["en"] ?? "", ts = r.texts["es"] ?? ""
+                    // Word count of the truthful-language transcript, else the longer one.
+                    let words = (fx.truth == "es" ? ts : te).split(separator: " ").count
+                    obs.append(Obs(fixture: fx.name, truth: fx.truth, shape: shape, rep: rep, words: words,
+                                   conf: r.conf, text: r.texts, nlEn: Self.nl(te), nlEs: Self.nl(ts)))
+                }
+            }
+        }
+
+        typealias Rule = (Obs) -> String
+        func c(_ o: Obs, _ l: String) -> Double { o.conf[l] ?? 0 }
+        var rules: [(String, Rule)] = [
+            ("R0 conf only", { c($0, "es") > c($0, "en") ? "es" : "en" }),
+            ("R2 conf x nlSelf", { c($0, "es") * $0.selfEs > c($0, "en") * $0.selfEn ? "es" : "en" }),
+            ("R4 nlSelf, tie->conf", { $0.selfEs == $0.selfEn ? (c($0, "es") > c($0, "en") ? "es" : "en") : ($0.selfEs > $0.selfEn ? "es" : "en") }),
+        ]
+        for t in [0.5, 0.7, 0.8, 0.9, 0.95, 0.99] {
+            rules.append(("R1 es iff nlEs>=\(f(t))", { ($0.selfEs >= t && !($0.text["es"] ?? "").isEmpty) ? "es" : "en" }))
+        }
+        for t in [0.5, 0.8, 0.95] {
+            rules.append(("R3 R1(\(f(t))) and R2", { ($0.selfEs >= t && c($0, "es") * $0.selfEs > c($0, "en") * $0.selfEn) ? "es" : "en" }))
+        }
+
+        out += "\n== Per-fixture means over 3 reps (shared analyzer): conf_en conf_es | NL(en text): p_en p_es | NL(es text): p_en p_es ==\n"
+        for fx in fixtures {
+            let os = obs.filter { $0.fixture == fx.name && $0.shape == "shared" }
+            func m(_ k: (Obs) -> Double) -> String { f(os.map(k).reduce(0, +) / Double(max(os.count, 1))) }
+            out += "\(fx.name.padding(toLength: 15, withPad: " ", startingAt: 0)) \((fx.truth ?? "mixed").padding(toLength: 5, withPad: " ", startingAt: 0)) \(m { c($0, "en") }) \(m { c($0, "es") }) | \(m { $0.nlEn.en }) \(m { $0.nlEn.es }) | \(m { $0.nlEs.en }) \(m { $0.nlEs.es })  words=\(os.first?.words ?? 0)\n"
+        }
+
+        out += "\n== Rules: correct / total runs (labelled fixtures only; 15 fixtures x 3 reps = 45 per shape) ==\n"
+        out += "rule                         | shared: all  short(<=3w)  en-audio  es-audio | two: all  short  en-audio  es-audio\n"
+        for (name, rule) in rules {
+            var cells: [String] = []
+            for shape in ["shared", "two"] {
+                let lab = obs.filter { $0.shape == shape && $0.truth != nil }
+                func score(_ xs: [Obs]) -> String { "\(xs.filter { rule($0) == $0.truth }.count)/\(xs.count)" }
+                cells.append([score(lab), score(lab.filter { $0.words <= 3 }), score(lab.filter { $0.truth == "en" }), score(lab.filter { $0.truth == "es" })].map { $0.padding(toLength: 6, withPad: " ", startingAt: 0) }.joined(separator: " "))
+            }
+            out += "\(name.padding(toLength: 28, withPad: " ", startingAt: 0)) | \(cells[0]) | \(cells[1])\n"
+        }
+        out += "\n== Misses per rule (shared analyzer): fixture(rep)->chosen ==\n"
+        for (name, rule) in rules {
+            let misses = obs.filter { $0.shape == "shared" && $0.truth != nil && rule($0) != $0.truth }
+            out += "\(name): " + (misses.isEmpty ? "none" : misses.map { "\($0.fixture)#\($0.rep)->\(rule($0))" }.joined(separator: " ")) + "\n"
+        }
+        out += "\n== Short clips (<=3 words), every run, shared analyzer ==\n"
+        for o in obs where o.shape == "shared" && o.words <= 3 && o.truth != nil {
+            out += "\(o.fixture)#\(o.rep) conf en/es \(f(c(o, "en")))/\(f(c(o, "es"))) nlSelf en/es \(f(o.selfEn))/\(f(o.selfEs)) | en:\"\(o.text["en"] ?? "")\" es:\"\(o.text["es"] ?? "")\"\n"
+        }
+        out += "\n== Code-switched clip, every run ==\n"
+        for o in obs where o.fixture == "en-codeswitch" {
+            out += "\(o.shape)#\(o.rep) conf en/es \(f(c(o, "en")))/\(f(c(o, "es"))) nlSelf en/es \(f(o.selfEn))/\(f(o.selfEs)) R0=\(rules[0].1(o)) R2=\(rules[1].1(o)) | en:\"\(o.text["en"] ?? "")\" es:\"\(o.text["es"] ?? "")\"\n"
+        }
+        out += "\n== Shared vs two-analyzer transcript quality (does sharing degrade text?) ==\n"
+        for fx in fixtures {
+            let a = obs.first { $0.fixture == fx.name && $0.shape == "shared" }, b = obs.first { $0.fixture == fx.name && $0.shape == "two" }
+            guard let a, let b else { continue }
+            out += "\(fx.name): conf shared en/es \(f(c(a, "en")))/\(f(c(a, "es"))) two \(f(c(b, "en")))/\(f(c(b, "es"))); text equal en:\(a.text["en"] == b.text["en"]) es:\(a.text["es"] == b.text["es"])\n"
+        }
+        flush()
+        #expect(!obs.isEmpty)
     }
 }
