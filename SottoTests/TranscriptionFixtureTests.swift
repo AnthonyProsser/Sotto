@@ -88,5 +88,37 @@ struct TranscriptionFixtureTests {
         }
         #expect(!draft.words.isEmpty)
     }
+
+    /// Vocabulary to the recognizer, measured. Prints nothing useful under the harness,
+    /// so the per-term hits are written to a file. "No worse" is the assertion: the
+    /// recognizer may already get a term right, and biasing must not lose one.
+    @Test
+    func vocabularyDoesNotHurtAndIsMeasured() async throws {
+        let terms = ["Quenthara", "Zorbelix"]
+        func hits(_ text: String) -> [String: Bool] {
+            Dictionary(uniqueKeysWithValues: terms.map { ($0, text.lowercased().contains($0.lowercased())) })
+        }
+        func run(_ vocabulary: [String]) async throws -> Transcription.Draft {
+            await Transcription.shared.prepare(Locale(identifier: "en_US"))
+            defer { Task { await Transcription.shared.prepare() } }
+            return try await Transcription.shared.transcribeFile(fixtureURL("en-vocab.caf"), vocabulary: vocabulary).draft
+        }
+        if !(await supported("en_US")) { try Test.cancel("en_US not supported on this machine") }
+        let without = try await run([])
+        let with = try await run(terms)
+        await Transcription.shared.prepare()
+        let a = hits(without.text), b = hits(with.text)
+        let report = """
+        without: \(without.text)
+          hits: \(terms.map { "\($0)=\(a[$0]!)" }.joined(separator: " "))
+        with:    \(with.text)
+          hits: \(terms.map { "\($0)=\(b[$0]!)" }.joined(separator: " "))
+
+        """
+        let dir = "/private/tmp/claude-501/-Users-anthonyprosser-Code-Sotto/9905479f-50fa-4b0d-9436-b51d90048347/scratchpad"
+        try? report.write(toFile: dir + "/vocab-results.txt", atomically: true, encoding: .utf8)
+        #expect(!with.text.isEmpty, "\(report)")
+        #expect(b.values.filter { $0 }.count >= a.values.filter { $0 }.count, "\(report)")
+    }
 }
 }

@@ -147,7 +147,7 @@ final class Dictation {
 
         pipeline = Task { [stream] in
             do {
-                try await Transcription.shared.begin(stream, language: ProfileStore.shared.active.language)
+                try await Transcription.shared.begin(stream, language: ProfileStore.shared.active.language, vocabulary: ProfileStore.shared.active.vocabulary)
             } catch {
                 guard !Task.isCancelled else { return }
                 log.error("Transcriber failed to start: \(error.localizedDescription, privacy: .public)")
