@@ -217,6 +217,7 @@ struct EscapePriorityTwoTests {
         #expect(Dictation.shared.cancelTranscription() == false)
     }
 }
+}
 
 // MARK: - Every offered dictation key
 
