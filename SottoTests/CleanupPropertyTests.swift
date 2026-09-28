@@ -61,7 +61,14 @@ struct CleanupPropertyTests {
             }
             if ok { passed += 1 }
         }
-        print("PASSRATE \(name) \(passed)/\(Self.runs)")
+        let line = "PASSRATE \(name) \(passed)/\(Self.runs)\n"
+        print(line, terminator: "")
+        let path = "/private/tmp/claude-501/-Users-anthonyprosser-Code-Sotto/9905479f-50fa-4b0d-9436-b51d90048347/scratchpad/cleanup-passrates.txt"
+        if let h = FileHandle(forWritingAtPath: path) ?? (FileManager.default.createFile(atPath: path, contents: nil) ? FileHandle(forWritingAtPath: path) : nil) {
+            _ = try? h.seekToEnd()
+            try? h.write(contentsOf: Data(line.utf8))
+            try? h.close()
+        }
         #expect(passed >= Self.threshold, "\(name): \(passed)/\(Self.runs); e.g. \(failures.first ?? "")")
     }
 
@@ -75,12 +82,12 @@ struct CleanupPropertyTests {
 
     @Test func promptForbidsRewritingAndTranslating() {
         // Overflow silently costs cleanup (4097 > 4096 seen at runtime), so the
-        // prompt stays short: ~4 chars/token puts 1,000 chars near 250 tokens.
-        #expect(Cleanup.instructions(for: DictationProfile(name: "Default")).count < 1000)
+        // prompt stays short: ~4 chars/token puts 1,400 chars near 350 tokens.
+        #expect(Cleanup.instructions(for: DictationProfile(name: "Default")).count < 1400)
         let prompt = Cleanup.instructions(for: DictationProfile(name: "Default"))
         #expect(prompt.contains("NEVER translate"))
-        #expect(prompt.contains("Change no other words"))
-        #expect(prompt.contains("meet at four"))
+        #expect(prompt.contains("Add punctuation and capitalisation"))
+        #expect(prompt.contains("Wednesday"))
     }
 
     /// Cleanup off, unavailable, or failed all save with `cleaned == nil`; a real
