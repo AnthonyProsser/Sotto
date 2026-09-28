@@ -122,7 +122,12 @@ enum Insertion {
     /// **No read means no space**, which is the safe direction: a missing space is
     /// a keystroke to fix, a spurious one appears in text the user did not touch.
     private static func leadingSpace(for element: AXUIElement) -> String {
-        guard let preceding = characterBeforeCaret(element) else { return "" }
+        leadingSpace(after: characterBeforeCaret(element))
+    }
+
+    /// The rule itself, apart from the Accessibility read, so it can be tested.
+    static func leadingSpace(after preceding: Character?) -> String {
+        guard let preceding else { return "" }
         guard !preceding.isWhitespace, !"([{<\u{201C}\u{2018}\"'".contains(preceding) else { return "" }
         return " "
     }

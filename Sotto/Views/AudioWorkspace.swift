@@ -8,7 +8,6 @@
 
 import AppKit
 import SwiftUI
-import UniformTypeIdentifiers
 
 // MARK: - Sidebar
 
@@ -36,58 +35,21 @@ struct AudioSidebar: View {
     /// recording happened to be selected — an import starts a new entry rather
     /// than doing anything to that one. It takes the slot slice 10's New Chat
     /// will take on the other mode, which is the action it is the twin of.
+    ///
+    /// Slice 14 builds it; until then §14.7's first pattern, the system disabled
+    /// state with the reason in the tooltip.
     private var transcribeFile: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Button { pickAndTranscribe() } label: {
-                Label("Transcribe File…", systemImage: "waveform.badge.plus")
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .contentShape(.rect)
-            }
-            .buttonStyle(.plain)
-            .disabled(library.importing != nil)
-            if let importing = library.importing {
-                Text("Transcribing \(importing)…")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
+        Button {} label: {
+            Label("Transcribe File…", systemImage: "waveform.badge.plus")
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(.rect)
         }
-        // Matches `ChatSidebar.newChat` — one control in two modes (§10.2).
+        .buttonStyle(.plain)
+        .disabled(true)
+        .help("File transcription arrives in a later build.")
         .padding(.horizontal)
+        // Matches `ChatSidebar.newChat` — one control in two modes (§10.2).
         .padding(.bottom, 14)
-    }
-
-    /// The open panel carries the profile picker as an accessory view: §10.3
-    /// picks the profile at import rather than inheriting the menu bar's,
-    /// because cleanup for a recorded meeting differs from cleanup for your
-    /// own dictation. Failures land in the pane's `FailureBanner` — the import
-    /// started here, so this window is where its failure waits.
-    private func pickAndTranscribe() {
-        let panel = NSOpenPanel()
-        panel.allowsMultipleSelection = false
-        panel.canChooseDirectories = false
-        panel.allowedContentTypes = [.audio]
-
-        let store = ProfileStore.shared
-        let popup = NSPopUpButton()
-        popup.addItems(withTitles: store.profiles.map(\.name))
-        popup.selectItem(at: store.profiles.firstIndex { $0.id == store.activeID } ?? 0)
-        let stack = NSStackView(views: [NSTextField(labelWithString: "Profile:"), popup])
-        stack.orientation = .horizontal
-        panel.accessoryView = stack
-
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        let profile = store.profiles[popup.indexOfSelectedItem]
-        library.importing = url.lastPathComponent
-        library.failure = nil
-        Task {
-            do {
-                try await FileImport.run(fileURL: url, profile: profile)
-            } catch {
-                library.failure = (error as? LocalizedError)?.errorDescription
-                    ?? "Transcription failed"
-            }
-            library.importing = nil
-        }
     }
 
     private var list: some View {

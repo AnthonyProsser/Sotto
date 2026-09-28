@@ -81,12 +81,6 @@ final class AudioLibrary {
     /// and the message waits in this pane whether or not it is frontmost.
     var failure: String?
 
-    /// The file an import is working on, if any. Shown under Transcribe File…
-    /// while it runs; the button is disabled for the same span, because one
-    /// import at a time is all the model answers — concurrent passes serialise
-    /// underneath anyway (`rules/models-and-network.md` §1.1).
-    var importing: String?
-
     private init() {
         NotificationCenter.default.addObserver(
             forName: .audioHistoryDidChange,

@@ -9,7 +9,10 @@ import FoundationModels
 import Testing
 @testable import Sotto
 
-@Suite(.serialized)
+/// Manual probe, not a test: it walks the real recordings folder and writes to
+/// /tmp. Runs only with `TEST_RUNNER_SOTTO_PROBES=1` in the environment.
+@Suite(.serialized, .enabled(if: ProcessInfo.processInfo.environment["SOTTO_PROBES"] != nil,
+                             "manual probe; set TEST_RUNNER_SOTTO_PROBES=1"))
 struct CleanupTimingProbe {
     @Test
     func probeReportAvailability() async throws {

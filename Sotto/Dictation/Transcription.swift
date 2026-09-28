@@ -112,9 +112,9 @@ actor Transcription {
     /// machine where `status(forModules:)` said `.supported` for the same locale;
     /// gating on it and calling `downloadAndInstall()` downloads a model the
     /// machine already has.
-    func prepare() async {
+    func prepare(_ locale: Locale = .current) async {
         do {
-            let kind = try await resolve(Locale.current)
+            let kind = try await resolve(locale)
             try await AssetInventory.reserve(locale: kind.locale)
             // A module built only to be asked two questions and thrown away; it
             // never meets an analyzer, so the one-analyzer rule above is intact.
@@ -176,7 +176,11 @@ actor Transcription {
         return try await collectDraft()
     }
 
-    /// Slice 14. A file off disk through the same modules as a dictation.
+    /// No UI caller: file import is out of v1 (`DECISIONS.md`, 2026-09-28). Kept as
+    /// the entry point fixture tests use, because `analyzeSequence(from:)` never
+    /// finalizes and `isFinal` results would never arrive.
+    ///
+    /// A file off disk through the same modules as a dictation.
     /// Returns the draft plus the analyzed audio as buffers, so the caller
     /// stores exactly what was transcribed. Anything AVFoundation reads is
     /// accepted (m4a, mp3, wav, aac); a format the analyzer does not want is
