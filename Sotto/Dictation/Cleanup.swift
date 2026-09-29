@@ -101,39 +101,19 @@ final class Cleanup {
                 model: model,
                 instructions: instructions ?? Self.instructions(for: profile)
             )
-            // `contextOptions` (and with it the reasoning level) is macOS
-            // 27+; on 26 the same request runs with default options, and the
-            // reasoning toggle in the pane is hidden there rather than inert.
-            let text: String
             // Temperature 0: cleanup is a transform, not a creation — the same
             // transcript must clean the same way every time, and sampling
             // variance is what produced an ALL-CAPS pass in testing.
             // The bound stops a runaway pass (4097-token overflows were seen
-            // at runtime); a cut-off structured response fails to decode and
-            // takes the failure path, so truncated text is never inserted.
+            // at runtime); a cut-off pass is caught by `sanitize`'s length guard or
+            // throws, so truncated text is never inserted.
             let options = GenerationOptions(
                 temperature: 0,
                 maximumResponseTokens: marked.count / 2 + 64
             )
-            if #available(macOS 27, *) {
-                // `includeSchemaInPrompt` lives on the context, not the call,
-                // on this overload.
-                let response = try await session.respond(
-                    to: marked,
-                    generating: CleanedTranscript.self,
-                    options: options,
-                    contextOptions: ContextOptions(includeSchemaInPrompt: false)
-                )
-                text = response.content.text
-            } else {
-                let response = try await session.respond(
-                    to: marked,
-                    generating: CleanedTranscript.self,
-                    includeSchemaInPrompt: false,
-                    options: options
-                )
-                text = response.content.text
-            }
+            // Plain String, not `@Generable`: guided generation returned `{}`
+            // (no `text` property) for many inputs, which no wording fixes.
+            let text = try await session.respond(to: marked, options: options).content
             return try Self.sanitize(text, input: marked)
         } catch let failure as Failure {
             throw failure
@@ -166,7 +146,7 @@ final class Cleanup {
     /// **The first paragraph is the answer to the old Soto bug**: a dictated
     /// question used to come back answered instead of cleaned, because nothing
     /// told the model the transcript is data, not instructions. Transform-only
-    /// wording plus the `CleanedTranscript` schema is the fix, and
+    /// wording is the fix, and
     /// `liveCleanupDoesNotAnswerQuestions` holds it.
     nonisolated static func instructions(for profile: DictationProfile) -> String {
         var text = """
@@ -270,15 +250,4 @@ final class Cleanup {
         }
         return chunks
     }
-}
-
-/// **The schema is half the Q&A fix.** A plain-String response has room for
-/// "The answer is…" before the transcript; guided generation constrains the
-/// output to the transcript shape. It stays OUT of the prompt
-/// (`includeSchemaInPrompt: false`): with the schema text injected, the model
-/// stopped punctuating from pause markers (measured, three runs).
-@Generable
-struct CleanedTranscript {
-    @Guide(description: "The cleaned transcript, and nothing else")
-    var text: String
 }

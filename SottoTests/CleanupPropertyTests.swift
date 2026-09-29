@@ -59,6 +59,15 @@ struct CleanupPropertyTests {
         output. Preserve the speaker's words and meaning in everything else.
         """
 
+    nonisolated static func append(_ line: String, to file: String) {
+        let path = "/private/tmp/claude-501/-Users-anthonyprosser-Code-Sotto/9905479f-50fa-4b0d-9436-b51d90048347/scratchpad/" + file
+        if let h = FileHandle(forWritingAtPath: path) ?? (FileManager.default.createFile(atPath: path, contents: nil) ? FileHandle(forWritingAtPath: path) : nil) {
+            _ = try? h.seekToEnd()
+            try? h.write(contentsOf: Data(line.utf8))
+            try? h.close()
+        }
+    }
+
     /// Temperature is 0, so repeating one input is one sample counted N times.
     /// Each case therefore takes N DISTINCT inputs, one pass each, per prompt
     /// variant; appends `PASSRATE <variant> <case> k/N` to the scratchpad file.
@@ -74,13 +83,17 @@ struct CleanupPropertyTests {
         for (variant, override) in [("baseline", Self.baselinePrompt), ("current", nil)] as [(String, String?)] {
             var passed = 0
             for input in inputs {
-                let out: String
+                var out: String
+                var threw = false
                 do {
                     out = try await Cleanup.shared.clean(input, profile: profile, instructions: override)
                 } catch {
-                    out = "THREW \(error)"
+                    out = "\(error)"
+                    threw = true
                 }
-                if check(input, out) {
+                let ok = !threw && check(input, out)
+                Self.append("DETAIL \(variant) \(name) \(ok ? "PASS" : threw ? "THREW" : "FAIL") \(input) -> \(out)\n", to: "cleanup-detail.txt")
+                if ok {
                     passed += 1
                 } else if variant == "current", firstFailure.isEmpty {
                     firstFailure = "\(input) -> \(out)"
@@ -89,12 +102,7 @@ struct CleanupPropertyTests {
             if variant == "current" { currentPassed = passed }
             let line = "PASSRATE \(variant) \(name) \(passed)/\(inputs.count)\n"
             print(line, terminator: "")
-            let path = "/private/tmp/claude-501/-Users-anthonyprosser-Code-Sotto/9905479f-50fa-4b0d-9436-b51d90048347/scratchpad/cleanup-passrates.txt"
-            if let h = FileHandle(forWritingAtPath: path) ?? (FileManager.default.createFile(atPath: path, contents: nil) ? FileHandle(forWritingAtPath: path) : nil) {
-                _ = try? h.seekToEnd()
-                try? h.write(contentsOf: Data(line.utf8))
-                try? h.close()
-            }
+            Self.append(line, to: "cleanup-passrates.txt")
         }
         #expect(currentPassed * 5 >= inputs.count * 4, "\(name): \(currentPassed)/\(inputs.count); e.g. \(firstFailure)")
     }
