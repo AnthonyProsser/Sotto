@@ -3,7 +3,8 @@
 //  Sotto
 //
 //  Settings → Dictation. §8.1's profiles as trimmed by DECISIONS.md — no model
-//  pickers, no context slider, no language picker. Retention lives in General.
+//  pickers, no context slider; language is Detect/English/Spanish per profile
+//  (DECISIONS.md, 2026-09-28). Retention lives in General.
 //
 
 import SwiftUI
