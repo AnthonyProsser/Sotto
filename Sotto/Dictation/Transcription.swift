@@ -180,11 +180,7 @@ actor Transcription {
 
     /// Start analysing. Returns as soon as the analyzer is running; the results
     /// accumulate in the background until `finish()` or `cancel()`.
-    func begin(
-        _ inputs: AsyncStream<AnalyzerInput>,
-        language: DictationProfile.Language = .detect,
-        vocabulary: [String] = []
-    ) async throws {
+    func begin(_ inputs: AsyncStream<AnalyzerInput>, language: DictationProfile.Language = .detect) async throws {
         if kind == nil { await prepare() }
         guard let kind else { throw Failure.notPrepared }
 
@@ -201,7 +197,6 @@ actor Transcription {
         // A second analyzer needs its own stream; `AnalyzerInput` shares the buffer.
         let streams = fanOut(inputs, to: lanes.count)
         for (lane, stream) in zip(lanes, streams) {
-            try await Self.setVocabulary(vocabulary, on: lane.analyzer)
             try await lane.analyzer.start(inputSequence: stream)
         }
     }
@@ -241,16 +236,6 @@ actor Transcription {
             let pair = [enKind, esKind].compactMap { $0 }
             return pair.isEmpty || (code != "en" && code != "es") ? [fallback] : pair
         }
-    }
-
-    /// The profile's terms as `AnalysisContext` contextual strings, so the recognizer
-    /// biases toward them. Per analyzer, so every lane gets it; before `start`, which
-    /// is when the context is read. Empty is no call: the default context is empty.
-    private static func setVocabulary(_ terms: [String], on analyzer: SpeechAnalyzer) async throws {
-        guard !terms.isEmpty else { return }
-        let context = AnalysisContext()
-        context.contextualStrings[.general] = terms
-        try await analyzer.setContext(context)
     }
 
     private func makeLane(_ engine: Engine, detector: SpeechDetector?) -> Lane {
@@ -295,7 +280,7 @@ actor Transcription {
     /// stores exactly what was transcribed. Anything AVFoundation reads is
     /// accepted (m4a, mp3, wav, aac); a format the analyzer does not want is
     /// converted through a temp file first.
-    func transcribeFile(_ source: URL, vocabulary: [String] = []) async throws -> (
+    func transcribeFile(_ source: URL) async throws -> (
         draft: Draft, buffers: [AVAudioPCMBuffer], format: AVAudioFormat
     ) {
         if kind == nil { await prepare() }
@@ -331,7 +316,6 @@ actor Transcription {
         // `finishAfterFile` is the whole point: without it the file's results
         // never finalize, the `isFinal` filter in `drain` matches nothing, and
         // the import lands empty with no error anywhere.
-        try await Self.setVocabulary(vocabulary, on: analyzer)
         try await analyzer.start(inputAudioFile: analysis, finishAfterFile: true)
         // `start` returns once the file is consumed, not once its results are
         // delivered. `collectDraft`'s grace assumes finalize has returned (as in

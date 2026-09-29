@@ -138,34 +138,3 @@ struct CleanupTests {
         #expect(out.contains(".") || out.contains(","), "got: \(out)")
     }
 }
-
-/// Measurement for the vocabulary decision: can cleanup alone repair a misheard term?
-/// Appends per-run term hits and punctuation to vocab-results.txt.
-extension CleanupTests {
-    @Test(.enabled(if: liveCleanupAvailable()))
-    func cleanupAloneRepairsMisheardVocabulary() async throws {
-        let terms = ["Quenthara", "Zorbelix"]
-        let profile = DictationProfile(name: "Vocab", vocabulary: terms)
-        let path = "/private/tmp/claude-501/-Users-anthonyprosser-Code-Sotto/9905479f-50fa-4b0d-9436-b51d90048347/scratchpad/vocab-results.txt"
-        func log(_ line: String) {
-            let old = (try? String(contentsOfFile: path, encoding: .utf8)) ?? ""
-            try? (old + line + "\n").write(toFile: path, atomically: true, encoding: .utf8)
-        }
-        log("--- cleanup probe \(Date())")
-        let inputs = [
-            ("speech input   ", "Please ask Quinthara to book the Zorbolix conference room for Friday."),
-            ("dictation input", "Please ask Quenthara to book the Zorbelix conference room for Friday"),
-        ]
-        for (label, input) in inputs {
-            var termRuns = 0
-            for run in 1...5 {
-                let out = try await Cleanup.shared.clean(input, profile: profile)
-                let hits = terms.filter { out.contains($0) }
-                let punct = out.hasSuffix(".") && (out.first?.isUppercase ?? false)
-                if hits.count == terms.count { termRuns += 1 }
-                log("\(label) run \(run): hits=\(hits) punctuated=\(punct) out=\(out)")
-            }
-            log("\(label) both terms in \(termRuns)/5 runs")
-        }
-    }
-}

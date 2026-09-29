@@ -9,7 +9,6 @@
 //  app, so the suite is serialised and puts the locale back afterwards.
 //
 
-import AVFoundation
 import Foundation
 import Speech
 import Testing
@@ -88,115 +87,6 @@ struct TranscriptionFixtureTests {
             #expect(text.contains(word), "missing \"\(word)\" in: \(draft.text)")
         }
         #expect(!draft.words.isEmpty)
-    }
-
-    /// Vocabulary to the recognizer, measured. Prints nothing useful under the harness,
-    /// so the per-term hits are written to a file. "No worse" is the assertion: the
-    /// recognizer may already get a term right, and biasing must not lose one.
-    @Test
-    func vocabularyDoesNotHurtAndIsMeasured() async throws {
-        let terms = ["Quenthara", "Zorbelix"]
-        func hits(_ text: String) -> [String: Bool] {
-            Dictionary(uniqueKeysWithValues: terms.map { ($0, text.lowercased().contains($0.lowercased())) })
-        }
-        func run(_ vocabulary: [String]) async throws -> Transcription.Draft {
-            await Transcription.shared.prepare(Locale(identifier: "en_US"))
-            defer { Task { await Transcription.shared.prepare() } }
-            return try await Transcription.shared.transcribeFile(fixtureURL("en-vocab.caf"), vocabulary: vocabulary).draft
-        }
-        if !(await supported("en_US")) { try Test.cancel("en_US not supported on this machine") }
-        let without = try await run([])
-        let with = try await run(terms)
-        await Transcription.shared.prepare()
-        let a = hits(without.text), b = hits(with.text)
-        let report = """
-        without: \(without.text)
-          hits: \(terms.map { "\($0)=\(a[$0]!)" }.joined(separator: " "))
-        with:    \(with.text)
-          hits: \(terms.map { "\($0)=\(b[$0]!)" }.joined(separator: " "))
-
-        """
-        let dir = "/private/tmp/claude-501/-Users-anthonyprosser-Code-Sotto/9905479f-50fa-4b0d-9436-b51d90048347/scratchpad"
-        try? report.write(toFile: dir + "/vocab-results.txt", atomically: true, encoding: .utf8)
-        #expect(!with.text.isEmpty, "\(report)")
-        #expect(b.values.filter { $0 }.count >= a.values.filter { $0 }.count, "\(report)")
-    }
-
-    /// Probe: does `AnalysisContext` move either transcriber on this OS? Each variant
-    /// appends one labelled line to vocab-results.txt. Self-contained (its own analyzers
-    /// fed from the fixture) so timing of `setContext` relative to `start` can vary.
-    @Test
-    func contextualStringsProbe() async throws {
-        let terms = ["Quenthara", "Zorbelix"]
-        let path = "/private/tmp/claude-501/-Users-anthonyprosser-Code-Sotto/9905479f-50fa-4b0d-9436-b51d90048347/scratchpad/vocab-results.txt"
-        func log(_ line: String) {
-            let old = (try? String(contentsOfFile: path, encoding: .utf8)) ?? ""
-            try? (old + line + "\n").write(toFile: path, atomically: true, encoding: .utf8)
-        }
-        if !(await supported("en_US")) { try Test.cancel("en_US not supported on this machine") }
-        let locale = Locale(identifier: "en_US")
-        await Transcription.shared.prepare(locale)   // reserves the locale for this process
-
-        enum When { case none, before, after }
-        func context(_ strings: [String]) -> AnalysisContext {
-            let c = AnalysisContext(); c.contextualStrings[.general] = strings; return c
-        }
-        func run(_ label: String, dictation: Bool, when: When, strings: [String]) async {
-            do {
-                let module: any SpeechModule = dictation
-                    ? DictationTranscriber(locale: locale, preset: .timeIndexedLongDictation)
-                    : SpeechTranscriber(locale: locale, transcriptionOptions: [], reportingOptions: [], attributeOptions: [])
-                let analyzer = SpeechAnalyzer(modules: [module])
-                guard let target = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [module]) else {
-                    log("\(label): no format"); return
-                }
-                let file = try AVAudioFile(forReading: fixtureURL("en-vocab.caf"))
-                let src = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: AVAudioFrameCount(file.length))!
-                try file.read(into: src)
-                let converter = AVAudioConverter(from: file.processingFormat, to: target)!
-                let ratio = target.sampleRate / file.processingFormat.sampleRate
-                let out = AVAudioPCMBuffer(pcmFormat: target, frameCapacity: AVAudioFrameCount(Double(src.frameLength) * ratio) + 4096)!
-                var fed = false
-                var err: NSError?
-                converter.convert(to: out, error: &err) { _, status in
-                    if fed { status.pointee = .endOfStream; return nil }
-                    fed = true; status.pointee = .haveData; return src
-                }
-                let (stream, cont) = AsyncStream<AnalyzerInput>.makeStream()
-                if when == .before { try await analyzer.setContext(context(strings)) }
-                try await analyzer.start(inputSequence: stream)
-                if when == .after { try await analyzer.setContext(context(strings)) }
-                cont.yield(AnalyzerInput(buffer: out)); cont.finish()
-                let collector = Task { () -> String in
-                    var text = ""
-                    if let m = module as? SpeechTranscriber {
-                        for try await r in m.results where r.isFinal { text += String(r.text.characters) }
-                    } else if let m = module as? DictationTranscriber {
-                        for try await r in m.results where r.isFinal { text += String(r.text.characters) }
-                    }
-                    return text
-                }
-                try await analyzer.finalizeAndFinishThroughEndOfInput()
-                let text = try await withThrowingTaskGroup(of: String.self) { g in
-                    g.addTask { try await collector.value }
-                    g.addTask { try await Task.sleep(for: .seconds(3)); collector.cancel(); return "" }
-                    let first = try await g.next() ?? ""
-                    g.cancelAll(); return first
-                }
-                let hits = terms.filter { text.lowercased().contains($0.lowercased()) }
-                log("\(label): hits=\(hits) text=\(text)")
-            } catch { log("\(label): ERROR \(error)") }
-        }
-        log("--- probe \(Date())")
-        let phrases = ["Please ask Quenthara to book the Zorbelix conference room for Friday"]
-        await run("speech none          ", dictation: false, when: .none, strings: [])
-        await run("speech before start  ", dictation: false, when: .before, strings: terms)
-        await run("speech after start   ", dictation: false, when: .after, strings: terms)
-        await run("speech after, phrase ", dictation: false, when: .after, strings: phrases)
-        await run("dictation none       ", dictation: true, when: .none, strings: [])
-        await run("dictation before     ", dictation: true, when: .before, strings: terms)
-        await run("dictation after      ", dictation: true, when: .after, strings: terms)
-        await Transcription.shared.prepare()
     }
 }
 }
