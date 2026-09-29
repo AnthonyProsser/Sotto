@@ -211,6 +211,7 @@ struct CleanupPropertyTests {
     func punctuationFromPauses() async throws {
         try await measure("punctuationFromPauses", [
             "the report is finished [pause 900ms] i will send it tomorrow [pause 900ms]",
+            "so the thing is [pause 800ms] i think we should ship it [pause 900ms]",
         ]) { _, out in
             let t = out.trimmingCharacters(in: .whitespacesAndNewlines)
             return !out.contains("[pause")
