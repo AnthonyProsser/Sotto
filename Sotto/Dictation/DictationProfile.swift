@@ -84,15 +84,15 @@ struct DictationProfile: Codable, Sendable, Identifiable, Equatable {
 final class ProfileStore {
     static let shared = ProfileStore()
 
-    private static let profilesKey = "DictationProfiles.v1"
-    private static let activeKey = "ActiveDictationProfileID"
+    static let profilesKey = "DictationProfiles.v1"
+    static let activeKey = "ActiveDictationProfileID"
 
     var profiles: [DictationProfile] {
         didSet { save() }
     }
 
     var activeID: String {
-        didSet { UserDefaults.standard.set(activeID, forKey: Self.activeKey) }
+        didSet { defaults.set(activeID, forKey: Self.activeKey) }
     }
 
     /// The profile the gesture path, the import sheet, and the switcher read.
@@ -102,9 +102,13 @@ final class ProfileStore {
         profiles.first { $0.id == activeID } ?? profiles[0]
     }
 
-    private init() {
+    private let defaults: UserDefaults
+
+    /// `defaults` is injectable so tests never touch the real profiles.
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
         let loaded: [DictationProfile]
-        if let data = UserDefaults.standard.data(forKey: Self.profilesKey),
+        if let data = defaults.data(forKey: Self.profilesKey),
            let decoded = try? JSONDecoder().decode([DictationProfile].self, from: data),
            !decoded.isEmpty
         {
@@ -116,7 +120,7 @@ final class ProfileStore {
             loaded = [DictationProfile(name: "Default")]
         }
         profiles = loaded
-        let stored = UserDefaults.standard.string(forKey: Self.activeKey)
+        let stored = defaults.string(forKey: Self.activeKey)
         activeID = loaded.contains { $0.id == stored } ? stored! : loaded[0].id
     }
 
@@ -157,7 +161,7 @@ final class ProfileStore {
 
     private func save() {
         if let data = try? JSONEncoder().encode(profiles) {
-            UserDefaults.standard.set(data, forKey: Self.profilesKey)
+            defaults.set(data, forKey: Self.profilesKey)
         }
         if !profiles.contains(where: { $0.id == activeID }), let first = profiles.first {
             activeID = first.id
