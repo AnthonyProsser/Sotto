@@ -88,5 +88,33 @@ struct TranscriptionFixtureTests {
         }
         #expect(!draft.words.isEmpty)
     }
+
+    // MARK: - SpeechTranscriber / DictationTranscriber choice
+
+    @Test func englishResolvesToTheSpeechTranscriber() async throws {
+        #expect(try await Transcription.shared.transcriberName(for: Locale(identifier: "en_US")) == "SpeechTranscriber")
+    }
+
+    /// Dutch is outside `SpeechTranscriber`'s 30 locales and inside `DictationTranscriber`'s 54.
+    @Test func aLocaleSpeechTranscriberLacksResolvesToTheDictationTranscriber() async throws {
+        let dutch = Locale(identifier: "nl_NL")
+        try #require(await SpeechTranscriber.supportedLocale(equivalentTo: dutch) == nil,
+                     "nl_NL is now a SpeechTranscriber locale; pick another fallback-only locale")
+        if await DictationTranscriber.supportedLocale(equivalentTo: dutch) == nil {
+            try Test.cancel("nl_NL not supported on this machine")
+        }
+        #expect(try await Transcription.shared.transcriberName(for: dutch) == "DictationTranscriber")
+    }
+
+    /// The real framework on the fallback path. No punctuation is asserted: that is
+    /// the gap cleanup fills (rules/audio-and-transcription.md §5).
+    @Test func dutchFixtureTranscribesThroughTheDictationTranscriber() async throws {
+        let draft = try await transcribe("nl-basic.caf", locale: "nl_NL")
+        #expect(draft.locales.contains { $0.hasPrefix("nl") }, "resolved locales: \(draft.locales), text: \(draft.text)")
+        #expect(!draft.text.isEmpty)
+        #expect(!draft.words.isEmpty, "the fallback path returned no word timings")
+        let starts = draft.words.map(\.start)
+        #expect(starts == starts.sorted(), "word starts are not monotonic")
+    }
 }
 }

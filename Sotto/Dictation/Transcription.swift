@@ -574,6 +574,12 @@ actor Transcription {
         }
     }
 
+    /// Which transcriber `resolve` picks for a locale — the seam tests use to pin the
+    /// `SpeechTranscriber`-then-`DictationTranscriber` order without building a module.
+    func transcriberName(for locale: Locale) async throws -> String {
+        try await resolve(locale).label
+    }
+
     /// `SpeechTranscriber` first — it is the one with native punctuation and
     /// capitalisation. `DictationTranscriber`'s 54 locales are what make a
     /// non-Apple backend unnecessary in v1, and every locale probed where

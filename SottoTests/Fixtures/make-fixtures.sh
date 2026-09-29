@@ -1,7 +1,7 @@
 #!/bin/zsh
 # Regenerates the checked-in speech fixtures. Synthetic `say` audio is a FLOOR for
 # transcription accuracy, not a real-microphone figure (rules/audio-and-transcription.md §5).
-# Needs the English (Samantha) and Spanish (Mónica, es_ES) voices: `say -v '?'`.
+# Needs the English (Samantha) and Spanish (Mónica, es_ES) and Dutch (Xander, nl_NL) voices: `say -v '?'`.
 set -euo pipefail
 cd "${0:A:h}"
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
@@ -16,6 +16,11 @@ caf "$tmp/fill.aiff" en-fillers.caf
 say -v "Mónica" -o "$tmp/es.aiff" \
   "Buenos días, quiero reservar una mesa para cuatro personas. [[slnc 1200]] Gracias por su ayuda."
 caf "$tmp/es.aiff" es-basic.caf
+
+# Dutch is past SpeechTranscriber's 30 locales, so it exercises the DictationTranscriber fallback.
+say -v Xander -o "$tmp/nl.aiff" \
+  "Goedemorgen, ik wil graag een tafel reserveren voor vier personen. Bedankt voor uw hulp."
+caf "$tmp/nl.aiff" nl-basic.caf
 
 say -v Samantha -o "$tmp/cs-en.aiff" "Please send the report to the team today, and"
 say -v "Mónica" -o "$tmp/cs-es.aiff" "también necesito la reunión de mañana"
