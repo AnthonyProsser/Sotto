@@ -109,6 +109,12 @@ struct TranscriptionFixtureTests {
     /// The real framework on the fallback path. No punctuation is asserted: that is
     /// the gap cleanup fills (rules/audio-and-transcription.md §5).
     @Test func dutchFixtureTranscribesThroughTheDictationTranscriber() async throws {
+        // Sotto never downloads a locale (consent rule), so without the Dutch
+        // model on the machine `prepare` keeps English and there is nothing to test.
+        let dutch = DictationTranscriber(locale: Locale(identifier: "nl_NL"), preset: .timeIndexedLongDictation)
+        if await AssetInventory.status(forModules: [dutch]) != .installed {
+            try Test.cancel("nl_NL DictationTranscriber model not installed; Sotto never downloads one")
+        }
         let draft = try await transcribe("nl-basic.caf", locale: "nl_NL")
         #expect(draft.locales.contains { $0.hasPrefix("nl") }, "resolved locales: \(draft.locales), text: \(draft.text)")
         #expect(!draft.text.isEmpty)
