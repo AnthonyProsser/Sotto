@@ -35,6 +35,8 @@ final class Cleanup {
         /// §10).
         case unavailable(String)
         case failed(Error)
+        /// The output failed `sanitize` — a runaway, an answer, or a rewrite.
+        case rejected
     }
 
     private init() {}
@@ -136,7 +138,7 @@ final class Cleanup {
         // model answered or rewrote instead of cleaning — raw text wins.
         guard words(text) <= words(AudioHistory.unmark(input)) * 3 / 2 + 8,
               retention(text, of: input) >= 0.7 else {
-            throw Failure.failed(CocoaError(.fileReadCorruptFile))
+            throw Failure.rejected
         }
         return text
     }

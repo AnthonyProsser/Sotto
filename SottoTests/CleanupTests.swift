@@ -114,7 +114,7 @@ struct CleanupTests {
             )
             #expect(out.localizedCaseInsensitiveContains("capital of France"), "got: \(out)")
             #expect(!out.localizedCaseInsensitiveContains("Paris"), "got: \(out)")
-        } catch Cleanup.Failure.failed {}
+        } catch Cleanup.Failure.rejected {}
     }
 
     /// The known instruction gap (`rules/audio-and-transcription.md` §3.1):
