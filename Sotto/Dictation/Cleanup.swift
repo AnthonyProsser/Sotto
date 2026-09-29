@@ -132,10 +132,31 @@ final class Cleanup {
             .replacing(/\s*\b\d{2,5}\s*ms\b/.ignoresCase(), with: "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let words = { (t: String) in t.split(whereSeparator: \.isWhitespace).count }
-        guard words(text) <= words(AudioHistory.unmark(input)) * 3 / 2 + 8 else {
+        // Retention: under 0.7 of the input's content words surviving means the
+        // model answered or rewrote instead of cleaning — raw text wins.
+        guard words(text) <= words(AudioHistory.unmark(input)) * 3 / 2 + 8,
+              retention(text, of: input) >= 0.7 else {
             throw Failure.failed(CocoaError(.fileReadCorruptFile))
         }
         return text
+    }
+
+    /// Lowercased words, punctuation and pause markers stripped.
+    nonisolated static func words(_ text: String) -> [String] {
+        AudioHistory.unmark(text)
+            .lowercased()
+            .split { !($0.isLetter || $0.isNumber || $0 == "'") }
+            .map(String.init)
+    }
+
+    /// Share of the input's words, less fillers and correction signals, that
+    /// appear in the output. A self-correction still loses only the abandoned
+    /// words, so it stays well above the guard.
+    nonisolated static func retention(_ output: String, of input: String) -> Double {
+        let dropped: Set<String> = ["um", "uh", "er", "eh", "este", "no", "wait", "actually"]
+        let source = words(input).filter { !dropped.contains($0) }
+        let kept = Set(words(output))
+        return source.isEmpty ? 1 : Double(source.filter(kept.contains).count) / Double(source.count)
     }
 
     // MARK: - Prompt

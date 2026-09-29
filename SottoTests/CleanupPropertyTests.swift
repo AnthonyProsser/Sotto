@@ -22,12 +22,7 @@ struct CleanupPropertyTests {
     // MARK: - Helpers
 
     /// Lowercased words with punctuation and pause markers stripped.
-    nonisolated static func words(_ text: String) -> [String] {
-        AudioHistory.unmark(text)
-            .lowercased()
-            .split { !($0.isLetter || $0.isNumber || $0 == "'") }
-            .map(String.init)
-    }
+    nonisolated static func words(_ text: String) -> [String] { Cleanup.words(text) }
 
     /// True when every word of `part` appears in `whole`, in order.
     nonisolated static func isSubsequence(_ part: [String], of whole: [String]) -> Bool {
@@ -121,6 +116,27 @@ struct CleanupPropertyTests {
         #expect(try Cleanup.sanitize("She said it was good. [PAUSE 900MS]", input: input) == "She said it was good.")
         #expect(throws: Cleanup.Failure.self) {
             try Cleanup.sanitize(String(repeating: "good ", count: 60), input: input)
+        }
+    }
+
+    /// Retention guard: answers and word-dropping rewrites throw; the five
+    /// self-correction pairs stay above 0.7 (ratios 0.80, 0.83, 0.83, 0.83, 0.88).
+    @Test func retentionGuardRejectsAnswersAndKeepsCorrections() throws {
+        let capital = "what is the capital of france [pause 800ms]"
+        #expect(throws: Cleanup.Failure.self) { try Cleanup.sanitize("Paris", input: capital) }
+        #expect(throws: Cleanup.Failure.self) {
+            try Cleanup.sanitize("We should ship it.", input: "so the thing is [pause 800ms] i think we should ship it [pause 900ms]")
+        }
+        let pairs = [
+            ("let's meet at three [pause 200ms] no wait actually four [pause 900ms]", "Let's meet at four."),
+            ("go to the store [pause 200ms] no wait actually the pharmacy [pause 900ms]", "Go to the pharmacy."),
+            ("send it to john [pause 200ms] no wait actually to mary [pause 900ms]", "Send it to Mary."),
+            ("the meeting is on monday [pause 200ms] no wait actually tuesday [pause 900ms]", "The meeting is on Tuesday."),
+            ("i want the red one [pause 200ms] no wait actually the blue one [pause 900ms]", "I want the blue one."),
+        ]
+        for (input, output) in pairs {
+            #expect(Cleanup.retention(output, of: input) >= 0.7, "\(output)")
+            #expect(try Cleanup.sanitize(output, input: input) == output)
         }
     }
 
