@@ -18,7 +18,7 @@ import Testing
 import os
 @testable import Sotto
 
-private let outDir = "/private/tmp/claude-501/-Users-anthonyprosser-Code-Sotto/9905479f-50fa-4b0d-9436-b51d90048347/scratchpad"
+private let outDir = "/tmp"
 
 // MARK: - Measurement helpers
 

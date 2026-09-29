@@ -116,30 +116,44 @@ struct DetectPathTests {
     }
 }
 
-/// Detect vs Always English, end-of-input to draft. Probe-gated: 40 real
-/// transcriptions. Prints p50/p95 and writes `lang-detect-latency.txt`.
+/// The v1 latency matrix: Always English vs Detect × cleanup off vs on, timed from
+/// end of input to the text `Dictation` would insert (transcription finish, then the
+/// cleanup pass on the marked draft, exactly as `Dictation.stop` runs it). Probe-gated:
+/// 20 timed runs per case after a warm-up. Writes `/tmp/sotto-latency-matrix.txt`.
 @Suite(.enabled(if: ProcessInfo.processInfo.environment["SOTTO_PROBES"] != nil))
 struct DetectLatencyProbe {
-    @Test func detectVersusAlwaysEnglish() async throws {
+    @Test func latencyMatrix() async throws {
+        let profile = DictationProfile(name: "Latency", cleanupEnabled: true)
+        func run(_ fixture: String, _ language: DictationProfile.Language, cleanup: Bool) async throws -> (ms: Double, rejected: Bool) {
+            let (draft, transcribe) = try await dictate(fixture, language)
+            guard cleanup, !draft.text.isEmpty else { return (transcribe, false) }
+            let marked = AudioHistory.mark(draft.text, words: draft.words, pauses: draft.pauses)
+            let t0 = ContinuousClock.now
+            var rejected = false
+            do { _ = try await Cleanup.shared.clean(marked, profile: profile) } catch { rejected = true }
+            let d = ContinuousClock.now - t0
+            return (transcribe + Double(d.components.seconds) * 1000 + Double(d.components.attoseconds) / 1e15, rejected)
+        }
         var out = ""
-        var p50 = [String: Double]()
         for fixture in ["en-q1.caf", "en-short1.caf"] {
-            for (label, language) in [("english", DictationProfile.Language.english), ("detect", .detect)] {
-                _ = try await dictate(fixture, language) // warm
-                var ms: [Double] = []
-                for _ in 0..<20 { ms.append(try await dictate(fixture, language).endToText) }
-                ms.sort()
-                let m = ms[ms.count / 2], p95 = ms[Int(Double(ms.count - 1) * 0.95)]
-                p50["\(fixture)-\(label)"] = m
-                out += String(format: "%@ %@ n=%d p50=%.0f ms p95=%.0f ms\n", fixture, label, ms.count, m, p95)
+            for cleanup in [false, true] {
+                for (label, language) in [("english", DictationProfile.Language.english), ("detect", .detect)] {
+                    _ = try await run(fixture, language, cleanup: cleanup) // warm
+                    var ms: [Double] = [], rejected = 0
+                    for _ in 0..<20 {
+                        let r = try await run(fixture, language, cleanup: cleanup)
+                        ms.append(r.ms); if r.rejected { rejected += 1 }
+                    }
+                    ms.sort()
+                    let p50 = ms[ms.count / 2], p95 = ms[Int(Double(ms.count - 1) * 0.95)]
+                    out += String(format: "%@ cleanup=%@ %@ n=%d p50=%.0f ms p95=%.0f ms rejected=%d\n",
+                                  fixture, cleanup ? "on " : "off", label, ms.count, p50, p95, rejected)
+                }
             }
         }
         print(out)
-        try? out.write(
-            toFile: "/private/tmp/claude-501/-Users-anthonyprosser-Code-Sotto/9905479f-50fa-4b0d-9436-b51d90048347/scratchpad/lang-detect-latency.txt",
-            atomically: true, encoding: .utf8
-        )
-        #expect(!p50.isEmpty)
+        try? out.write(toFile: "/tmp/sotto-latency-matrix.txt", atomically: true, encoding: .utf8)
+        #expect(!out.isEmpty)
     }
 }
 }

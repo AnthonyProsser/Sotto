@@ -55,7 +55,7 @@ struct CleanupPropertyTests {
         """
 
     nonisolated static func append(_ line: String, to file: String) {
-        let path = "/private/tmp/claude-501/-Users-anthonyprosser-Code-Sotto/9905479f-50fa-4b0d-9436-b51d90048347/scratchpad/" + file
+        let path = "/tmp/sotto-" + file
         if let h = FileHandle(forWritingAtPath: path) ?? (FileManager.default.createFile(atPath: path, contents: nil) ? FileHandle(forWritingAtPath: path) : nil) {
             _ = try? h.seekToEnd()
             try? h.write(contentsOf: Data(line.utf8))
