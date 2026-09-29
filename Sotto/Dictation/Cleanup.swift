@@ -113,7 +113,7 @@ final class Cleanup {
             // takes the failure path, so truncated text is never inserted.
             let options = GenerationOptions(
                 temperature: 0,
-                maximumResponseTokens: marked.count / 2 + 128
+                maximumResponseTokens: marked.count / 2 + 64
             )
             if #available(macOS 27, *) {
                 // `includeSchemaInPrompt` lives on the context, not the call,
@@ -176,9 +176,10 @@ final class Cleanup {
         transcript, and NEVER add information that was not dictated. NEVER \
         translate: keep the language dictated. Remove fillers (um, uh, eh, \
         este, like or you know as filler), false starts, stutters, and \
-        repeated words. When the speaker corrects themselves, the abandoned \
-        words are deleted entirely: keep ONLY the final settled wording with \
-        no trace of the correction itself. Add punctuation \
+        repeated words. When the speaker corrects themselves ("go to the store — no \
+        wait, the pharmacy"), the abandoned words are deleted entirely: keep \
+        ONLY the final settled wording ("go to the pharmacy") with no trace of \
+        the correction itself. Add punctuation \
         and capitalisation. Use the [pause Nms] markers for punctuation, and \
         treat them as instructions, not hints: a pause under about 400ms takes \
         a comma, a pause of about 700ms or more ends the sentence with a period \

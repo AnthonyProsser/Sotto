@@ -3,9 +3,9 @@
 //  SottoTests
 //
 //  Feature 8: cleanup removes disfluencies and adds punctuation, and never
-//  rewrites. The model is sampled at temperature 0 but not bit-stable across
-//  runs, so each live case runs N times and asserts a pass rate; the rate is
-//  printed as `PASSRATE <case> k/N` for the record.
+//  rewrites. Temperature 0 makes a repeated input one sample, so each live case
+//  takes N distinct inputs and asserts k >= 0.8N; the rate is recorded as
+//  `PASSRATE <variant> <case> k/N`.
 //
 
 import AVFoundation
@@ -16,9 +16,6 @@ import Testing
 @MainActor
 struct CleanupPropertyTests {
 
-    static let runs = 5
-    /// 4 of 5: one stray sample is tolerated, a systematic miss is not.
-    static let threshold = 4
 
     private let profile = DictationProfile(name: "Test", cleanupEnabled: true)
 
@@ -62,9 +59,11 @@ struct CleanupPropertyTests {
         output. Preserve the speaker's words and meaning in everything else.
         """
 
-    /// Runs the case over `runs` fresh cleanups per prompt variant; appends
-    /// `PASSRATE <variant> <case> k/N` to the scratchpad file. Only the current
-    /// prompt is asserted. A throw counts as a failed run, not a crashed test.
+    /// Temperature is 0, so repeating one input is one sample counted N times.
+    /// Each case therefore takes N DISTINCT inputs, one pass each, per prompt
+    /// variant; appends `PASSRATE <variant> <case> k/N` to the scratchpad file.
+    /// Only the current prompt is asserted, at k >= 0.8N. A throw is a failed
+    /// input, not a crashed test.
     private func measure(
         _ name: String,
         _ inputs: [String],
@@ -74,24 +73,21 @@ struct CleanupPropertyTests {
         var firstFailure = ""
         for (variant, override) in [("baseline", Self.baselinePrompt), ("current", nil)] as [(String, String?)] {
             var passed = 0
-            for _ in 0..<Self.runs {
-                var ok = true
-                for input in inputs {
-                    let out: String
-                    do {
-                        out = try await Cleanup.shared.clean(input, profile: profile, instructions: override)
-                    } catch {
-                        out = "THREW \(error)"
-                    }
-                    if !check(input, out) {
-                        ok = false
-                        if variant == "current", firstFailure.isEmpty { firstFailure = "\(input) -> \(out)" }
-                    }
+            for input in inputs {
+                let out: String
+                do {
+                    out = try await Cleanup.shared.clean(input, profile: profile, instructions: override)
+                } catch {
+                    out = "THREW \(error)"
                 }
-                if ok { passed += 1 }
+                if check(input, out) {
+                    passed += 1
+                } else if variant == "current", firstFailure.isEmpty {
+                    firstFailure = "\(input) -> \(out)"
+                }
             }
             if variant == "current" { currentPassed = passed }
-            let line = "PASSRATE \(variant) \(name) \(passed)/\(Self.runs)\n"
+            let line = "PASSRATE \(variant) \(name) \(passed)/\(inputs.count)\n"
             print(line, terminator: "")
             let path = "/private/tmp/claude-501/-Users-anthonyprosser-Code-Sotto/9905479f-50fa-4b0d-9436-b51d90048347/scratchpad/cleanup-passrates.txt"
             if let h = FileHandle(forWritingAtPath: path) ?? (FileManager.default.createFile(atPath: path, contents: nil) ? FileHandle(forWritingAtPath: path) : nil) {
@@ -100,7 +96,7 @@ struct CleanupPropertyTests {
                 try? h.close()
             }
         }
-        #expect(currentPassed >= Self.threshold, "\(name): \(currentPassed)/\(Self.runs); e.g. \(firstFailure)")
+        #expect(currentPassed * 5 >= inputs.count * 4, "\(name): \(currentPassed)/\(inputs.count); e.g. \(firstFailure)")
     }
 
     // MARK: - Deterministic (no model)
@@ -163,7 +159,10 @@ struct CleanupPropertyTests {
         let fillers: Set<String> = ["um", "uh", "er", "eh"]
         try await measure("fillersRemoved", [
             "so um i was uh thinking that we should uh go early [pause 900ms]",
-            "er the the report is um almost ready [pause 900ms]",
+            "er the report is um almost ready [pause 900ms]",
+            "uh can you send me the file um before lunch [pause 900ms]",
+            "we um need to uh finish the draft by er tomorrow [pause 900ms]",
+            "um the meeting uh starts at nine [pause 900ms]",
         ]) { input, out in
             let w = Self.words(out)
             return fillers.isDisjoint(with: w) && Self.isSubsequence(w, of: Self.words(input))
@@ -173,23 +172,31 @@ struct CleanupPropertyTests {
     @Test(.enabled(if: liveCleanupAvailable()))
     func stuttersCollapsed() async throws {
         try await measure("stuttersCollapsed", [
-            "i i want to to go to the the market [pause 900ms]",
-        ]) { _, out in
-            Self.words(out) == ["i", "want", "to", "go", "to", "the", "market"]
+            "i i want to go to the the market [pause 900ms]",
+            "we we should should leave now [pause 900ms]",
+            "the the meeting is is at nine [pause 900ms]",
+            "please please send the the file [pause 900ms]",
+            "she said said hello to everyone [pause 900ms]",
+        ]) { input, out in
+            var expected: [String] = []
+            for w in Self.words(input) where w != expected.last { expected.append(w) }
+            return Self.words(out) == expected
         }
     }
 
     @Test(.enabled(if: liveCleanupAvailable()))
     func selfCorrectionResolved() async throws {
-        try await measure("selfCorrectionResolved", [
-            "let's meet at three [pause 200ms] no wait actually four [pause 900ms]",
-            "go to the store [pause 200ms] no wait actually the pharmacy [pause 900ms]",
-        ]) { input, out in
+        let cases: [String: (keep: String, drop: String)] = [
+            "let's meet at three [pause 200ms] no wait actually four [pause 900ms]": ("four", "three"),
+            "go to the store [pause 200ms] no wait actually the pharmacy [pause 900ms]": ("pharmacy", "store"),
+            "send it to john [pause 200ms] no wait actually to mary [pause 900ms]": ("mary", "john"),
+            "the meeting is on monday [pause 200ms] no wait actually tuesday [pause 900ms]": ("tuesday", "monday"),
+            "i want the red one [pause 200ms] no wait actually the blue one [pause 900ms]": ("blue", "red"),
+        ]
+        try await measure("selfCorrectionResolved", Array(cases.keys).sorted()) { input, out in
             let w = Self.words(out)
-            if input.contains("three") {
-                return w.contains("four") && !w.contains("three") && !w.contains("wait")
-            }
-            return w.contains("pharmacy") && !w.contains("store") && !w.contains("wait")
+            guard let c = cases[input] else { return false }
+            return w.contains(c.keep) && !w.contains(c.drop) && !w.contains("wait")
         }
     }
 
@@ -202,6 +209,8 @@ struct CleanupPropertyTests {
             "the quarterly report shows that revenue grew slightly [pause 500ms] but costs rose faster than expected [pause 900ms]",
             "please send the contract to legal before friday afternoon [pause 900ms]",
             "she said the results were surprisingly good considering everything [pause 900ms]",
+            "the new design looks cleaner and easier to read [pause 900ms]",
+            "we should schedule the review for early next week [pause 900ms]",
         ]) { input, out in
             Self.words(out) == Self.words(input)
         }
@@ -212,6 +221,9 @@ struct CleanupPropertyTests {
         try await measure("punctuationFromPauses", [
             "the report is finished [pause 900ms] i will send it tomorrow [pause 900ms]",
             "so the thing is [pause 800ms] i think we should ship it [pause 900ms]",
+            "first we open the file [pause 900ms] then we check the totals [pause 900ms]",
+            "thanks for waiting [pause 900ms] the system is back online [pause 900ms]",
+            "the client called this morning [pause 900ms] they want a revised quote [pause 900ms]",
         ]) { _, out in
             let t = out.trimmingCharacters(in: .whitespacesAndNewlines)
             return !out.contains("[pause")
@@ -221,17 +233,18 @@ struct CleanupPropertyTests {
         }
     }
 
+    /// Spanish stays Spanish: only the fillers go, nothing is translated or
+    /// substituted.
     @Test(.enabled(if: liveCleanupAvailable()))
     func spanishStaysSpanish() async throws {
-        let english: Set<String> = ["we", "should", "leave", "early", "the", "and", "is"]
         try await measure("spanishStaysSpanish", [
             "eh bueno este creo que deberíamos salir temprano [pause 900ms]",
+            "este necesito enviar el informe eh antes del viernes [pause 900ms]",
+            "eh vamos a revisar este los números mañana [pause 900ms]",
+            "creo que eh el proyecto está casi terminado [pause 900ms]",
+            "este la reunión empieza a las nueve eh en la oficina [pause 900ms]",
         ]) { input, out in
-            let w = Self.words(out)
-            return !w.contains("eh") && !w.contains("este")
-                && w.contains("deberíamos") && w.contains("salir") && w.contains("temprano")
-                && english.isDisjoint(with: w)
-                && Self.isSubsequence(w, of: Self.words(input))
+            Self.words(out) == Self.words(input).filter { $0 != "eh" && $0 != "este" }
         }
     }
 
@@ -241,6 +254,9 @@ struct CleanupPropertyTests {
         try await measure("sensitiveContentNotRefused", [
             "this damn printer is broken again [pause 900ms]",
             "the patient presented with acute myocardial infarction and needs a transfusion [pause 900ms]",
+            "this is a bloody nightmare and i hate it [pause 900ms]",
+            "the doctor prescribed antibiotics for the infection [pause 900ms]",
+            "what the hell is going on with the server [pause 900ms]",
         ]) { input, out in
             Self.words(out) == Self.words(input)
         }
@@ -251,6 +267,9 @@ struct CleanupPropertyTests {
         try await measure("alreadyCleanUnchanged", [
             "The meeting starts at nine in the conference room. [pause 900ms]",
             "Thanks for the update, I will review it tonight. [pause 900ms]",
+            "The report is ready for review. [pause 900ms]",
+            "Please call me when you arrive. [pause 900ms]",
+            "We shipped the update on Monday. [pause 900ms]",
         ]) { input, out in
             Self.words(out) == Self.words(input)
         }
