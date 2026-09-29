@@ -86,7 +86,11 @@ final class Cleanup {
     /// `concurrentRequests` deterministically; two distinct sessions both
     /// complete. There is no parallel speedup either way — the model serialises
     /// underneath.
-    func clean(_ marked: String, profile: DictationProfile) async throws -> String {
+    func clean(
+        _ marked: String,
+        profile: DictationProfile,
+        instructions: String? = nil
+    ) async throws -> String {
         if let reason = unavailabilityReason {
             throw Failure.unavailable(reason)
         }
@@ -95,7 +99,7 @@ final class Cleanup {
         do {
             let session = LanguageModelSession(
                 model: model,
-                instructions: Self.instructions(for: profile)
+                instructions: instructions ?? Self.instructions(for: profile)
             )
             // `contextOptions` (and with it the reasoning level) is macOS
             // 27+; on 26 the same request runs with default options, and the
@@ -104,7 +108,13 @@ final class Cleanup {
             // Temperature 0: cleanup is a transform, not a creation — the same
             // transcript must clean the same way every time, and sampling
             // variance is what produced an ALL-CAPS pass in testing.
-            let options = GenerationOptions(temperature: 0)
+            // The bound stops a runaway pass (4097-token overflows were seen
+            // at runtime); a cut-off structured response fails to decode and
+            // takes the failure path, so truncated text is never inserted.
+            let options = GenerationOptions(
+                temperature: 0,
+                maximumResponseTokens: marked.count / 2 + 64
+            )
             if #available(macOS 27, *) {
                 // `includeSchemaInPrompt` lives on the context, not the call,
                 // on this overload.
@@ -124,13 +134,28 @@ final class Cleanup {
                 )
                 text = response.content.text
             }
-            return text.trimmingCharacters(in: .whitespacesAndNewlines)
+            return try Self.sanitize(text, input: marked)
         } catch let failure as Failure {
             throw failure
         } catch {
             log.error("Cleanup pass failed: \(error.localizedDescription, privacy: .public)")
             throw Failure.failed(error)
         }
+    }
+
+    /// The markers are ours and never survive: strip any `[pause Nms]` or
+    /// fragment of one the model echoed. Output far longer than its input is a
+    /// runaway, not a cleanup — it throws so the raw text is inserted instead.
+    nonisolated static func sanitize(_ output: String, input: String) throws -> String {
+        let text = output
+            .replacing(/\s*\[?\s*pause\s*\d*\s*ms\s*\]?/.ignoresCase(), with: "")
+            .replacing(/\s*\b\d{2,5}\s*ms\b/.ignoresCase(), with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let words = { (t: String) in t.split(whereSeparator: \.isWhitespace).count }
+        guard words(text) <= words(AudioHistory.unmark(input)) * 3 / 2 + 8 else {
+            throw Failure.failed(CocoaError(.fileReadCorruptFile))
+        }
+        return text
     }
 
     // MARK: - Prompt
@@ -151,10 +176,10 @@ final class Cleanup {
         transcript, and NEVER add information that was not dictated. NEVER \
         translate: keep the language dictated. Remove fillers (um, uh, eh, \
         este, like or you know as filler), false starts, stutters, and \
-        repeated words. When the speaker corrects themselves ("send it on \
-        Tuesday — no wait, actually Wednesday"), the abandoned words are \
-        deleted entirely: keep ONLY the final settled wording ("Send it on \
-        Wednesday.") with no trace of the correction itself. Add punctuation \
+        repeated words. When the speaker corrects themselves (no, wait, \
+        actually, I mean), the abandoned words and the correction signal are \
+        deleted entirely: keep ONLY the final settled wording, with no trace of \
+        the correction itself. Add punctuation \
         and capitalisation. Use the [pause Nms] markers for punctuation, and \
         treat them as instructions, not hints: a pause under about 400ms takes \
         a comma, a pause of about 700ms or more ends the sentence with a period \
