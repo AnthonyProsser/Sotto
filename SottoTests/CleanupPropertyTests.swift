@@ -119,9 +119,14 @@ struct CleanupPropertyTests {
         }
     }
 
-    /// Retention guard: answers and word-dropping rewrites throw; the five
-    /// self-correction pairs stay above 0.7 (ratios 0.80, 0.83, 0.83, 0.83, 0.88).
+    /// Retention guard: answers and word-dropping rewrites throw, down to a
+    /// single dropped word; the five self-correction pairs stay above 0.7
+    /// (ratios 0.80, 0.83, 0.83, 0.83, 0.88).
     @Test func retentionGuardRejectsAnswersAndKeepsCorrections() throws {
+        #expect(throws: Cleanup.Failure.self) {
+            try Cleanup.sanitize("Call me when you arrive.", input: "please call me when you arrive [pause 900ms]")
+        }
+        #expect(try Cleanup.sanitize("I want to go.", input: "um i i want like to go [pause 900ms]") == "I want to go.")
         let capital = "what is the capital of france [pause 800ms]"
         #expect(throws: Cleanup.Failure.self) { try Cleanup.sanitize("Paris", input: capital) }
         #expect(throws: Cleanup.Failure.self) {

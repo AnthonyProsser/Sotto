@@ -22,7 +22,8 @@ import os
 /// at `start()` and written to the input unit explicitly, so the system default
 /// moving underneath — a headset unplugged in another app — cannot take the
 /// engine with it. A selection made while recording is held in `pending` and
-/// applied at the next `start()`.
+/// applied at the next `start()`. The pinned device itself disappearing is the
+/// one change that cannot be held; `failOver()` moves the recording instead.
 ///
 /// Not main-actor: `start()`/`stop()` are called from the main actor, and the
 /// tap block runs on a real-time audio thread. Nothing here touches UI.
@@ -73,7 +74,22 @@ nonisolated final class AudioCapture: @unchecked Sendable {
     /// follower below that stops the bars strobing.
     static let requestedBufferFrames: AVAudioFrameCount = 4096
 
-    private init() {}
+    /// The format the analyzer asked for at `start()`, kept so a failover can
+    /// rebuild the converter from a different device's format.
+    private var analyzerFormat: AVAudioFormat?
+
+    private init() {
+        // **The one device change that cannot be held (§4.8): the pinned device
+        // went away.** When that stops the engine — AVAudioEngine does on an
+        // input format change — the stream stays open and silent without this,
+        // and the rest of the recording is lost with the waveform still on
+        // screen. Guarded on the engine having stopped, so the notification a
+        // `start()` itself posts is a no-op. Main queue, because `start()` and
+        // `stop()` run there and the graph is not safe to mutate from two threads.
+        NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main
+        ) { [weak self] _ in self?.failOver() }
+    }
 
     // MARK: - Devices
 
@@ -254,18 +270,8 @@ nonisolated final class AudioCapture: @unchecked Sendable {
     func start(analyzerFormat: AVAudioFormat?) throws -> AsyncStream<AnalyzerInput> {
         try checkPermission()
         let device = try arm()
-        let captureFormat = tapFormat ?? engine.inputNode.outputFormat(forBus: 0)
-        if let analyzerFormat, analyzerFormat != captureFormat {
-            guard let converter = AVAudioConverter(from: captureFormat, to: analyzerFormat) else {
-                throw Failure.unconvertibleFormat
-            }
-            // The analyzer wants one contiguous timeline, and `AVAudioConverter`
-            // is stateful across calls when the sample rate changes.
-            converter.primeMethod = .none
-            self.converter = converter
-        } else {
-            converter = nil
-        }
+        self.analyzerFormat = analyzerFormat
+        try makeConverter()
 
         smoothed = 0
         retained = []
@@ -309,6 +315,40 @@ nonisolated final class AudioCapture: @unchecked Sendable {
         // stop path, which is off the latency path entirely.
         engine.prepare()
         converter = nil
+    }
+
+    /// Continue the same recording on whatever `arm()` now resolves — the chosen
+    /// device if it is still there, else the system default. Same stream, same
+    /// retained buffers, converted to the same analyzer format, so neither the
+    /// transcript nor the saved audio sees a seam beyond the gap itself.
+    private func failOver() {
+        guard isRunning, !engine.isRunning else { return }
+        do {
+            let device = try arm()
+            try makeConverter()
+            try engine.start()
+            log.notice("Input device changed mid-recording; continuing on device \(device, privacy: .public).")
+        } catch {
+            // Nothing left to record from. Ending the stream lets the release
+            // transcribe what was captured instead of waiting on silence.
+            log.error("Input device lost mid-recording: \(error.localizedDescription, privacy: .public)")
+            continuation?.finish()
+        }
+    }
+
+    private func makeConverter() throws {
+        let captureFormat = tapFormat ?? engine.inputNode.outputFormat(forBus: 0)
+        guard let analyzerFormat, analyzerFormat != captureFormat else {
+            converter = nil
+            return
+        }
+        guard let converter = AVAudioConverter(from: captureFormat, to: analyzerFormat) else {
+            throw Failure.unconvertibleFormat
+        }
+        // The analyzer wants one contiguous timeline, and `AVAudioConverter`
+        // is stateful across calls when the sample rate changes.
+        converter.primeMethod = .none
+        self.converter = converter
     }
 
     /// Move the retained PCM out. Slice 5 encodes it; abort discards it.

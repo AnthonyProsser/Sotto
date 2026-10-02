@@ -76,7 +76,7 @@ Do not build past one of these without asking — `.claude/rules/open-questions.
 
 - **Apple Speech is the only backend.** No Parakeet, FluidAudio, Silero, or Whisper, and **no backend-selection seam built on spec** — a second engine stays possible in a later version behind §2.2's interface, but v1 does not carry scaffolding for one. `rules/audio-and-transcription.md` §1.0.
 - **STT and the LLM share the ANE**, so the slice may not assume they are on different blocks. Mic-rate capture may overlap Foundation Models freely; that is measured, not assumed.
-- **The audio chunker is skipped.** Pause collection (`SpeechDetector`) and keeping the PCM moved to slice 5. Do not resurrect `chunkFloor` / `maxChunk` / discard-and-retranscribe.
+- **The audio chunker is skipped.** Pause collection (word-timing gaps since 2026-09-29; `SpeechDetector` is gone) and keeping the PCM moved to slice 5. Do not resurrect `chunkFloor` / `maxChunk` / discard-and-retranscribe.
 
 ### Slice 5 — History storage
 

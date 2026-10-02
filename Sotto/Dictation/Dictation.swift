@@ -83,7 +83,7 @@ final class Dictation {
 
     // MARK: - The gesture's signals
 
-    /// **Right Cmd went down and nothing is classified yet.** The microphone opens
+    /// **The dictation key went down and nothing is classified yet.** The microphone opens
     /// here and the HUD is composited transparent, so that the ~55 ms of CoreAudio
     /// bring-up and the ~100 ms of buffer fill happen *inside* the 250 ms the user
     /// spends holding the key rather than after it. A hold that becomes a dictation
@@ -92,11 +92,11 @@ final class Dictation {
     ///
     /// **The transcriber is not touched.** A `SpeechTranscriber` module belongs to
     /// one `SpeechAnalyzer` for its lifetime and building one costs real work; a
-    /// speculative analyzer on every Right Cmd press is not a trade worth making.
+    /// speculative analyzer on every key press is not a trade worth making.
     /// The stream is held instead, and handed over at `start()`.
     ///
     /// **It cannot raise the microphone prompt.** §2.4 asks at first use of the
-    /// feature, and an unclassified key-down is not that — a bare Right Cmd would
+    /// feature, and an unclassified key-down is not that — a bare key press would
     /// otherwise put the TCC dialog on screen, and `engine.start()` blocks its
     /// caller until that dialog is answered. Unauthorized, this does nothing and
     /// the real gesture asks, exactly as before.

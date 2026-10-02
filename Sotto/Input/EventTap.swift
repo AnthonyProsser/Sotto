@@ -30,7 +30,7 @@ final class EventTap {
     static let shared = EventTap()
 
     private let log = Logger(subsystem: "com.anthonyprosser.Sotto", category: "gestures")
-    private let recognizer = GestureRecognizer()
+    let recognizer = GestureRecognizer()
     private var tap: CFMachPort?
 
     /// §10.4's arbiter, and the only piece of the priority stack that cannot live
@@ -41,7 +41,13 @@ final class EventTap {
     /// one action fires" true rather than hoped for.
     private var abortedThisEvent = false
 
-    private init() {}
+    /// The key the gesture in flight began on. Settings can change `DictationKey.current`
+    /// mid-hold, and filtering the release by the new key would drop it and leave the
+    /// recognizer in push-to-talk, swallowing the keyboard. A new key applies from idle.
+    private var gestureKey = DictationKey.current
+
+    /// Internal rather than private only so tests can drive a tap that is never installed.
+    init() {}
 
     /// The keycodes this file compares against, and the complete list: Escape, plus
     /// whichever single `DictationKey` is chosen. Nothing else is decoded.
@@ -151,7 +157,7 @@ final class EventTap {
 
     // MARK: - The callback
 
-    private func handle(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
+    func handle(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
         let pass = Unmanaged.passUnretained(event)
 
         // macOS disables a tap whose callback ran long, and says so through the tap
@@ -177,7 +183,8 @@ final class EventTap {
         switch type {
         case .flagsChanged:
             // Every other modifier is discarded here without being looked at.
-            guard let input = DictationKey.current.input(keycode: keycode, flags: flags) else {
+            if recognizer.isIdle { gestureKey = .current }
+            guard let input = gestureKey.input(keycode: keycode, flags: flags) else {
                 return pass
             }
             disposition = recognizer.handle(input)

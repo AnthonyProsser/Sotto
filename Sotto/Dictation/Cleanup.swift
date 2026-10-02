@@ -134,10 +134,12 @@ final class Cleanup {
             .replacing(/\s*\b\d{2,5}\s*ms\b/.ignoresCase(), with: "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let words = { (t: String) in t.split(whereSeparator: \.isWhitespace).count }
-        // Retention: under 0.7 of the input's content words surviving means the
-        // model answered or rewrote instead of cleaning — raw text wins.
+        // Retention: a self-correction legitimately loses its abandoned words, so
+        // it gets 0.7; anything else may lose only fillers, or the model answered
+        // or rewrote instead of cleaning — raw text wins.
+        let corrected = !Set(Self.words(input)).isDisjoint(with: ["wait", "actually"])
         guard words(text) <= words(AudioHistory.unmark(input)) * 3 / 2 + 8,
-              retention(text, of: input) >= 0.7 else {
+              retention(text, of: input) >= (corrected ? 0.7 : 1) else {
             throw Failure.rejected
         }
         return text
@@ -153,9 +155,10 @@ final class Cleanup {
 
     /// Share of the input's words, less fillers and correction signals, that
     /// appear in the output. A self-correction still loses only the abandoned
-    /// words, so it stays well above the guard.
+    /// words, so it stays well above the guard. "like", "you", "know" are here
+    /// because the prompt removes them as filler.
     nonisolated static func retention(_ output: String, of input: String) -> Double {
-        let dropped: Set<String> = ["um", "uh", "er", "eh", "este", "no", "wait", "actually"]
+        let dropped: Set<String> = ["um", "uh", "er", "eh", "este", "like", "you", "know", "no", "wait", "actually"]
         let source = words(input).filter { !dropped.contains($0) }
         let kept = Set(words(output))
         return source.isEmpty ? 1 : Double(source.filter(kept.contains).count) / Double(source.count)

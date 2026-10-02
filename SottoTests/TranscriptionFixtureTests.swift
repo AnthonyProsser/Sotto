@@ -67,14 +67,9 @@ struct TranscriptionFixtureTests {
         let starts = draft.words.map(\.start)
         #expect(starts == starts.sorted(), "word starts are not monotonic")
         #expect(draft.words.allSatisfy { $0.start >= 0 })
-        // The fixture holds a 1.2 s silence. Known product bug, not a test-path gap:
-        // SpeechDetector.results delivers zero results on macOS 27 in every
-        // configuration (file or stream input, all sensitivities), and none of the
-        // 26 real recordings on disk has ever stored a pause. When this starts
-        // passing, `withKnownIssue` fails the run and the wrapper comes off.
-        withKnownIssue("SpeechDetector reports no results; pause markers never reach cleanup") {
-            #expect(draft.pauses.contains { $0.duration >= 0.6 }, "pauses: \(draft.pauses)")
-        }
+        // The fixture holds a 1.2 s silence; pauses are word-timing gaps, because
+        // SpeechDetector reports nothing on macOS 27 (DECISIONS.md, 2026-09-29).
+        #expect(draft.pauses.contains { $0.duration >= 0.6 }, "pauses: \(draft.pauses)")
     }
 
     @Test

@@ -44,11 +44,8 @@ actor Transcription {
     ///
     /// **One lane, or two under Detect** (`DECISIONS.md`, 2026-09-28): a lane is a
     /// module, its own analyzer, and its collector. Detect runs an English and a
-    /// Spanish lane on the same buffers to completion; the detector rides the
-    /// first lane only, since pauses do not depend on the locale.
+    /// Spanish lane on the same buffers to completion.
     private var lanes: [Lane] = []
-    private var detector: SpeechDetector?
-    private var pauseCollector: Task<[Draft.Pause], Error>?
     private var feeder: Task<Void, Never>?
     /// English and Spanish, reserved at launch when the machine already has them.
     private var enKind: Kind?
@@ -67,9 +64,10 @@ actor Transcription {
     /// independently validated by the measurement: word starts hit a bounded
     /// floor, sentence ends smear to +1075 ms at long pauses.
     ///
-    /// `pauses` come from `SpeechDetector` on the same analyzer. Slice 4's
-    /// chunker is gone; the detector is what is left of that slice, folded
-    /// into history so cleanup (§4.6) and the sidecar have something to store.
+    /// `pauses` are the gaps between one word's end and the next word's start
+    /// (`DECISIONS.md`, 2026-09-29) — `SpeechDetector` reports nothing at all on
+    /// macOS 27. This is the one place a word's end is read, and it never
+    /// reaches `words` or seek.
     struct Draft: Sendable {
         struct Word: Sendable, Codable, Equatable {
             let text: String
@@ -142,15 +140,8 @@ actor Transcription {
             // skipped, never downloaded (§2's consent rule).
             enKind = await reserveIfInstalled("en_US")
             esKind = await reserveIfInstalled("es_ES")
-            // Preinstalled. Included so the format we cache is one every
-            // module will accept; a detector-incompatible format would
-            // make pause collection fail on every recording.
             let modules = [probe] + [enKind, esKind].compactMap { $0?.makeEngine().module }
-            let detector = SpeechDetector()
-            format = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: modules + [detector])
-            if format == nil {
-                format = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: modules)
-            }
+            format = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: modules)
             self.kind = kind
             log.notice("""
                 Transcriber ready: \(kind.label, privacy: .public) \
@@ -185,15 +176,7 @@ actor Transcription {
         guard let kind else { throw Failure.notPrepared }
 
         let kinds = try kinds(for: language, fallback: kind)
-        // Fresh module per recording, same rule as the transcriber. `reportResults`
-        // is what fills `results`; the convenience init does not.
-        let detector = SpeechDetector(
-            detectionOptions: .init(sensitivityLevel: .medium),
-            reportResults: true
-        )
-        self.detector = detector
-        lanes = kinds.enumerated().map { makeLane($1.makeEngine(), detector: $0 == 0 ? detector : nil) }
-        pauseCollector = Task { try await Self.collectPauses(detector) }
+        lanes = kinds.map { makeLane($0.makeEngine()) }
         // A second analyzer needs its own stream; `AnalyzerInput` shares the buffer.
         let streams = fanOut(inputs, to: lanes.count)
         for (lane, stream) in zip(lanes, streams) {
@@ -238,12 +221,10 @@ actor Transcription {
         }
     }
 
-    private func makeLane(_ engine: Engine, detector: SpeechDetector?) -> Lane {
-        var modules: [any SpeechModule] = [engine.module]
-        if let detector { modules.append(detector) }
-        return Lane(
+    private func makeLane(_ engine: Engine) -> Lane {
+        Lane(
             engine: engine,
-            analyzer: SpeechAnalyzer(modules: modules),
+            analyzer: SpeechAnalyzer(modules: [engine.module]),
             collector: Task { try await engine.collect() }
         )
     }
@@ -287,14 +268,8 @@ actor Transcription {
         guard kind != nil else { throw Failure.notPrepared }
 
         let engine = kind!.makeEngine()
-        let detector = SpeechDetector(
-            detectionOptions: .init(sensitivityLevel: .medium),
-            reportResults: true
-        )
-        self.detector = detector
-
         let target = await SpeechAnalyzer.bestAvailableAudioFormat(
-            compatibleWith: [engine.module, detector]
+            compatibleWith: [engine.module]
         ) ?? format ?? AVAudioFormat(
             commonFormat: .pcmFormatFloat32,
             sampleRate: 16_000,
@@ -309,10 +284,9 @@ actor Transcription {
         }
         let analysis = try AVAudioFile(forReading: analysisURL)
 
-        let lane = makeLane(engine, detector: detector)
+        let lane = makeLane(engine)
         let analyzer = lane.analyzer
         lanes = [lane]
-        pauseCollector = Task { try await Self.collectPauses(detector) }
         // `finishAfterFile` is the whole point: without it the file's results
         // never finalize, the `isFinal` filter in `drain` matches nothing, and
         // the import lands empty with no error anywhere.
@@ -378,10 +352,7 @@ actor Transcription {
             drafts.append(d)
         }
         // English is lane 0 under Detect; a lone lane is the answer as it stands.
-        var draft = drafts.count == 2 && Self.prefersSpanish(drafts[1].text) ? drafts[1] : drafts[0]
-        // A detector failure must not take the transcript with it.
-        draft.pauses = (try? await pauseCollector?.value) ?? []
-        return draft
+        return drafts.count == 2 && Self.prefersSpanish(drafts[1].text) ? drafts[1] : drafts[0]
     }
 
     /// **Two seconds, against a healthy delivery of under one millisecond.** Every
@@ -405,7 +376,6 @@ actor Transcription {
         // but it is called *after* the cancels so that a hang inside it cannot
         // take the recovery with it.
         lanes.forEach { $0.collector.cancel() }
-        pauseCollector?.cancel()
         feeder?.cancel()
         for lane in lanes { await lane.analyzer.cancelAndFinishNow() }
     }
@@ -416,7 +386,6 @@ actor Transcription {
         feeder?.cancel()
         for lane in lanes { await lane.analyzer.cancelAndFinishNow() }
         lanes.forEach { $0.collector.cancel() }
-        pauseCollector?.cancel()
         teardown()
     }
 
@@ -424,8 +393,6 @@ actor Transcription {
         lanes = []
         feeder?.cancel()
         feeder = nil
-        pauseCollector = nil
-        detector = nil
     }
 
     // MARK: - File helpers
@@ -600,6 +567,7 @@ actor Transcription {
     private static func drain<S: AsyncSequence>(_ results: S) async throws -> Draft
     where S.Element: SpeechModuleResult & Textual {
         var draft = Draft(text: "", words: [], pauses: [])
+        var lastEnd: TimeInterval?
         for try await result in results where result.isFinal {
             let text = result.text
             draft.text += String(text.characters)
@@ -611,22 +579,15 @@ actor Transcription {
                 // Start only. The seek offset ships at zero — landing half a
                 // second early is pre-roll, not error (§9.3).
                 draft.words.append(.init(text: word, start: range.start.seconds))
+                // Anything under 80 ms is a flap, not a pause cleanup would want.
+                if let lastEnd, range.start.seconds - lastEnd >= 0.08 {
+                    draft.pauses.append(.init(start: lastEnd, duration: range.start.seconds - lastEnd))
+                }
+                lastEnd = range.end.seconds
             }
         }
         draft.text = draft.text.trimmingCharacters(in: .whitespacesAndNewlines)
         return draft
-    }
-
-    /// Silence ranges from `SpeechDetector`. Anything under 80 ms is treated as
-    /// a flap, not a pause cleanup would want.
-    private static func collectPauses(_ detector: SpeechDetector) async throws -> [Draft.Pause] {
-        var pauses: [Draft.Pause] = []
-        for try await result in detector.results where result.isFinal && !result.speechDetected {
-            let duration = result.range.duration.seconds
-            guard duration >= 0.08 else { continue }
-            pauses.append(.init(start: result.range.start.seconds, duration: duration))
-        }
-        return pauses
     }
 }
 

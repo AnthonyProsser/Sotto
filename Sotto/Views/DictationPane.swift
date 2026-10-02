@@ -15,6 +15,9 @@ struct DictationPane: View {
     @Bindable private var store = ProfileStore.shared
 
     @State private var newTerm = ""
+    /// The name field's text, which may be a name `rename` refused (blank or taken).
+    @State private var draftName = ""
+    @FocusState private var nameFocused: Bool
     @AppStorage(DictationKey.defaultsKey) private var dictationKey = DictationKey.default
 
     var body: some View {
@@ -86,9 +89,22 @@ struct DictationPane: View {
     private func profileEditor(_ profile: Binding<DictationProfile>) -> some View {
         Group {
             Section {
-                TextField("Profile name", text: profile.name)
+                TextField("Profile name", text: Binding(
+                    get: { draftName },
+                    set: { draftName = $0; store.rename(profile.wrappedValue.id, to: $0) }
+                ))
+                .focused($nameFocused)
+                // A refused name reverts when editing ends, so the field never
+                // disagrees with the store once you leave it.
+                .onSubmit { draftName = profile.wrappedValue.name }
+                .onChange(of: nameFocused) { if !nameFocused { draftName = profile.wrappedValue.name } }
+                .onChange(of: profile.wrappedValue.id, initial: true) { draftName = profile.wrappedValue.name }
             } header: {
                 Text("Name")
+            } footer: {
+                if store.isTaken(draftName, except: profile.wrappedValue.id) {
+                    Text("Another profile already has this name.")
+                }
             }
 
             Section {

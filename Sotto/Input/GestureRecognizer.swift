@@ -81,6 +81,9 @@ final class GestureRecognizer {
         didSet { generation &+= 1 }
     }
 
+    /// Whether a new gesture may begin — `EventTap` re-reads the chosen key only here.
+    var isIdle: Bool { state == .idle }
+
     func handle(_ input: Input) -> Disposition {
         switch input {
         case .keyDown:
@@ -119,7 +122,7 @@ final class GestureRecognizer {
         // **Never consumed here.** Consumption starts at the threshold, which is what
         // leaves the key working as a modifier — with Option, Option+e and every other dead key still
         // reach the app, because at this point the press is not yet a dictation
-        // (DECISIONS.md, 2026-08-15, carried over from Right Cmd).
+        // (DECISIONS.md, 2026-08-15).
         return .pass
     }
 

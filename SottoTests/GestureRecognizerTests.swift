@@ -6,6 +6,7 @@
 //  the recognizer's only time seam, so the tests own it.
 //
 
+import CoreGraphics
 import Foundation
 import Testing
 @testable import Sotto
@@ -275,5 +276,51 @@ struct DictationKeyTests {
         #expect(esc.send(.otherKeyDown(isEscape: true)) == .pass)
         release(esc)
         #expect(esc.take() == [.arm, .pushToTalk, .abort])
+    }
+}
+
+// MARK: - The key changing mid-gesture
+
+extension SharedState {
+    /// Drives a never-installed `EventTap` with real `CGEvent`s. Serialized because it
+    /// writes the `DictationKey` preference.
+    @Suite struct DictationKeyChangeTests {
+        private func modifier(_ key: DictationKey, down: Bool) -> CGEvent {
+            let event = CGEvent(keyboardEventSource: nil, virtualKey: CGKeyCode(key.keycode), keyDown: down)!
+            event.type = .flagsChanged
+            event.flags = CGEventFlags(rawValue: down ? key.deviceMask : 0)
+            return event
+        }
+
+        private func letter(_ tap: EventTap) -> Bool {
+            let event = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true)!
+            return tap.handle(type: .keyDown, event: event) != nil
+        }
+
+        @Test func releaseOfTheOldKeyEndsAHoldAfterTheSettingChanges() {
+            let defaults = UserDefaults.standard
+            let saved = defaults.string(forKey: DictationKey.defaultsKey)
+            defer { defaults.set(saved, forKey: DictationKey.defaultsKey) }
+            defaults.set(DictationKey.rightOption.rawValue, forKey: DictationKey.defaultsKey)
+
+            let tap = EventTap()
+            var timers: [() -> Void] = []
+            tap.recognizer.after = { _, body in timers.append(body) }
+
+            _ = tap.handle(type: .flagsChanged, event: modifier(.rightOption, down: true))
+            timers.removeFirst()() // the hold threshold
+            #expect(!letter(tap), "a hold owns the keyboard")
+
+            defaults.set(DictationKey.rightControl.rawValue, forKey: DictationKey.defaultsKey)
+            _ = tap.handle(type: .flagsChanged, event: modifier(.rightOption, down: false))
+            #expect(tap.recognizer.isIdle, "the release was filtered by the new key")
+            #expect(letter(tap), "the keyboard is still swallowed")
+
+            // The next gesture is on the new key, and the old one is ignored.
+            _ = tap.handle(type: .flagsChanged, event: modifier(.rightOption, down: true))
+            #expect(tap.recognizer.isIdle)
+            _ = tap.handle(type: .flagsChanged, event: modifier(.rightControl, down: true))
+            #expect(!tap.recognizer.isIdle)
+        }
     }
 }

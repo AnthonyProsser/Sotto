@@ -129,6 +129,24 @@ final class ProfileStore {
         profiles[index] = profile
     }
 
+    /// Names are unique, case-insensitively, and never blank — the menu switcher and
+    /// `AudioEntry.profile` tell profiles apart by name alone. Returns whether it took;
+    /// the pane keeps a rejected name as a draft rather than suffixing it mid-typing.
+    @discardableResult
+    func rename(_ id: String, to name: String) -> Bool {
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, !isTaken(name, except: id),
+              let index = profiles.firstIndex(where: { $0.id == id })
+        else { return false }
+        profiles[index].name = name
+        return true
+    }
+
+    func isTaken(_ name: String, except id: String) -> Bool {
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        return profiles.contains { $0.id != id && $0.name.caseInsensitiveCompare(name) == .orderedSame }
+    }
+
     func add() {
         let profile = DictationProfile(name: unusedName(basedOn: "Untitled"))
         profiles.append(profile)
@@ -152,10 +170,10 @@ final class ProfileStore {
     }
 
     private func unusedName(basedOn root: String) -> String {
-        let taken = Set(profiles.map(\.name))
-        if !taken.contains(root) { return root }
+        let taken = Set(profiles.map { $0.name.lowercased() })
+        if !taken.contains(root.lowercased()) { return root }
         var n = 2
-        while taken.contains("\(root) \(n)") { n += 1 }
+        while taken.contains("\(root) \(n)".lowercased()) { n += 1 }
         return "\(root) \(n)"
     }
 

@@ -43,6 +43,23 @@ struct ProfileTests {
     }
 
     @Test
+    func renameRefusesATakenOrBlankName() {
+        let store = ProfileStore(defaults: makeDefaults())
+        store.add()
+        let id = store.active.id
+        #expect(!store.rename(id, to: "Default"))
+        #expect(!store.rename(id, to: " default "))
+        #expect(!store.rename(id, to: "   "))
+        #expect(store.active.name == "Untitled")
+        // An intermediate that collides does not stop the name being typed past it.
+        #expect(store.rename(id, to: "Default Work"))
+        #expect(store.rename(id, to: "untitled"))  // its own name, recased
+        #expect(store.profiles.map(\.name) == ["Default", "untitled"])
+        store.add()
+        #expect(store.active.name == "Untitled 2")
+    }
+
+    @Test
     func lastProfileCannotBeDeleted() {
         let store = ProfileStore(defaults: makeDefaults())
         store.delete(store.profiles[0])
