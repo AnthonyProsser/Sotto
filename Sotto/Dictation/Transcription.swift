@@ -60,7 +60,7 @@ actor Transcription {
     private init() {}
 
     /// What a finished recording produces. Word timings are **starts only** —
-    /// `endTime` is never read (§9.3), which sidesteps a bug class and is
+    /// seek never uses `endTime` (§9.3), which sidesteps a bug class and is
     /// independently validated by the measurement: word starts hit a bounded
     /// floor, sentence ends smear to +1075 ms at long pauses.
     ///

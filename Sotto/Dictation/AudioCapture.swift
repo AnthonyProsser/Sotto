@@ -26,7 +26,8 @@ import os
 /// one change that cannot be held; `failOver()` moves the recording instead.
 ///
 /// Not main-actor: `start()`/`stop()` are called from the main actor, and the
-/// tap block runs on a real-time audio thread. Nothing here touches UI.
+/// tap block runs on the engine's tap thread. Nothing here touches UI; what the
+/// two threads share sits behind `lock`.
 nonisolated final class AudioCapture: @unchecked Sendable {
     static let shared = AudioCapture()
 
@@ -36,6 +37,10 @@ nonisolated final class AudioCapture: @unchecked Sendable {
     /// Called on the audio thread, once per buffer, with 0…1.
     var onLevel: (@Sendable (Double) -> Void)?
 
+    /// Guards `continuation`, `converter`, `retained` and `retainedFormat`, which
+    /// the tap reads and appends to while `start()`, `stop()` and the recording
+    /// hand-off replace them on the main thread.
+    private let lock = NSLock()
     private var continuation: AsyncStream<AnalyzerInput>.Continuation?
     private var converter: AVAudioConverter?
     private var isRunning = false
@@ -47,9 +52,8 @@ nonisolated final class AudioCapture: @unchecked Sendable {
     private var tapDevice: AudioDeviceID?
     private var tapFormat: AVAudioFormat?
 
-    /// Copies of the converted buffers, kept until `takeRecording()` or
-    /// `discardRecording()`. The tap's own buffer is reused by the engine, so
-    /// retaining it without a copy would alias later frames.
+    /// The buffers sent to the analyzer, kept until `takeRecording()` or
+    /// `discardRecording()`.
     private var retained: [AVAudioPCMBuffer] = []
     private var retainedFormat: AVAudioFormat?
 
@@ -274,15 +278,17 @@ nonisolated final class AudioCapture: @unchecked Sendable {
         try makeConverter()
 
         smoothed = 0
-        retained = []
-        retainedFormat = nil
-        // Replacing a live continuation without finishing it strands whatever is
-        // reading the old stream, and `SpeechAnalyzer` reading it would then never
-        // see end-of-input. Nothing should reach here with one open; ending it is
-        // one line and removes the possibility.
-        self.continuation?.finish()
         let (stream, continuation) = AsyncStream<AnalyzerInput>.makeStream()
-        self.continuation = continuation
+        lock.withLock {
+            retained = []
+            retainedFormat = nil
+            // Replacing a live continuation without finishing it strands whatever
+            // is reading the old stream, and `SpeechAnalyzer` reading it would then
+            // never see end-of-input. Nothing should reach here with one open;
+            // ending it is one line and removes the possibility.
+            self.continuation?.finish()
+            self.continuation = continuation
+        }
 
         isRunning = true
         do {
@@ -290,7 +296,7 @@ nonisolated final class AudioCapture: @unchecked Sendable {
         } catch {
             isRunning = false
             continuation.finish()
-            self.continuation = nil
+            lock.withLock { self.continuation = nil }
             throw error
         }
         log.notice("Capture started on device \(device, privacy: .public).")
@@ -305,8 +311,10 @@ nonisolated final class AudioCapture: @unchecked Sendable {
         // had already been stopped left the analyzer waiting on a stream nobody
         // would ever finish — an unbounded `await` holding `pipeline`, which is
         // the whole of the stuck-HUD state (2026-08-24).
-        continuation?.finish()
-        continuation = nil
+        lock.withLock {
+            continuation?.finish()
+            continuation = nil
+        }
         guard isRunning else { return }
         isRunning = false
         engine.stop()
@@ -314,7 +322,7 @@ nonisolated final class AudioCapture: @unchecked Sendable {
         // what keeps the next `start()` from paying for the graph again. On the
         // stop path, which is off the latency path entirely.
         engine.prepare()
-        converter = nil
+        lock.withLock { converter = nil }
     }
 
     /// Continue the same recording on whatever `arm()` now resolves — the chosen
@@ -323,6 +331,10 @@ nonisolated final class AudioCapture: @unchecked Sendable {
     /// transcript nor the saved audio sees a seam beyond the gap itself.
     private func failOver() {
         guard isRunning, !engine.isRunning else { return }
+        // With no analyzer preference the stream carries the first device's own
+        // format; the new device converts to it, so the analyzer and the saved
+        // audio never see two formats in one recording.
+        analyzerFormat = analyzerFormat ?? lock.withLock { retainedFormat }
         do {
             let device = try arm()
             try makeConverter()
@@ -332,14 +344,14 @@ nonisolated final class AudioCapture: @unchecked Sendable {
             // Nothing left to record from. Ending the stream lets the release
             // transcribe what was captured instead of waiting on silence.
             log.error("Input device lost mid-recording: \(error.localizedDescription, privacy: .public)")
-            continuation?.finish()
+            lock.withLock { continuation?.finish() }
         }
     }
 
     private func makeConverter() throws {
         let captureFormat = tapFormat ?? engine.inputNode.outputFormat(forBus: 0)
         guard let analyzerFormat, analyzerFormat != captureFormat else {
-            converter = nil
+            lock.withLock { self.converter = nil }
             return
         }
         guard let converter = AVAudioConverter(from: captureFormat, to: analyzerFormat) else {
@@ -348,22 +360,26 @@ nonisolated final class AudioCapture: @unchecked Sendable {
         // The analyzer wants one contiguous timeline, and `AVAudioConverter`
         // is stateful across calls when the sample rate changes.
         converter.primeMethod = .none
-        self.converter = converter
+        lock.withLock { self.converter = converter }
     }
 
     /// Move the retained PCM out. Slice 5 encodes it; abort discards it.
     func takeRecording() -> (format: AVAudioFormat, buffers: [AVAudioPCMBuffer])? {
-        defer {
-            retained = []
-            retainedFormat = nil
+        lock.withLock {
+            defer {
+                retained = []
+                retainedFormat = nil
+            }
+            guard let retainedFormat, !retained.isEmpty else { return nil }
+            return (retainedFormat, retained)
         }
-        guard let retainedFormat, !retained.isEmpty else { return nil }
-        return (retainedFormat, retained)
     }
 
     func discardRecording() {
-        retained = []
-        retainedFormat = nil
+        lock.withLock {
+            retained = []
+            retainedFormat = nil
+        }
     }
 
     /// Resolve the input device, pin it, and make sure the capture tap and the
@@ -391,10 +407,18 @@ nonisolated final class AudioCapture: @unchecked Sendable {
             let level = Self.level(of: buffer)
             smoothed = level > smoothed ? level : smoothed * 0.6 + level * 0.4
             onLevel?(smoothed)
-            guard let converted = convert(buffer) else { return }
-            if retainedFormat == nil { retainedFormat = converted.format }
-            if let copy = Self.copy(converted) { retained.append(copy) }
-            continuation?.yield(AnalyzerInput(buffer: converted))
+            let (converter, continuation) = lock.withLock { (self.converter, self.continuation) }
+            // **One owned buffer, shared by the analyzer and the recording.** The
+            // engine reuses its tap buffer, so an unconverted one is copied — the
+            // analyzer reads it later, from a queue, and would otherwise see later
+            // frames. A converted one is already fresh and needs no second copy.
+            let owned = if let converter { convert(buffer, with: converter) } else { Self.copy(buffer) }
+            guard let owned else { return }
+            lock.withLock {
+                if self.retainedFormat == nil { self.retainedFormat = owned.format }
+                self.retained.append(owned)
+            }
+            continuation?.yield(AnalyzerInput(buffer: owned))
         }
         tapDevice = device
         tapFormat = format
@@ -422,8 +446,7 @@ nonisolated final class AudioCapture: @unchecked Sendable {
 
     /// Runs on the audio thread. Returns `nil` when the converter had nothing to
     /// emit yet, which is normal on a sample-rate change and not an error.
-    private func convert(_ buffer: AVAudioPCMBuffer) -> AVAudioPCMBuffer? {
-        guard let converter else { return buffer }
+    private func convert(_ buffer: AVAudioPCMBuffer, with converter: AVAudioConverter) -> AVAudioPCMBuffer? {
 
         let ratio = converter.outputFormat.sampleRate / converter.inputFormat.sampleRate
         let capacity = AVAudioFrameCount((Double(buffer.frameLength) * ratio).rounded(.up))
