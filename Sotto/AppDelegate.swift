@@ -88,6 +88,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
               ProfileStore.shared.profiles.contains(where: { $0.id == id })
         else { return }
         ProfileStore.shared.activeID = id
+        Cleanup.shared.prewarm()
     }
 
     /// `Cmd+,` from the app menu, and **Settings…** in the menu bar menu. Settings

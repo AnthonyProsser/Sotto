@@ -114,14 +114,18 @@ struct CleanupPropertyTests {
         let input = "she said it was good [pause 900ms]"
         #expect(try Cleanup.sanitize("She said it was good. 1000ms", input: input) == "She said it was good.")
         #expect(try Cleanup.sanitize("She said it was good. [PAUSE 900MS]", input: input) == "She said it was good.")
+        #expect(try Cleanup.sanitize("<transcript>She said it was good.</transcript>", input: input) == "She said it was good.")
+        #expect(try Cleanup.sanitize("Output: She said it was good.", input: input) == "She said it was good.")
+        #expect(try Cleanup.sanitize("Eh, vamos a revisar los números.", input: "eh vamos a revisar los números") == "Vamos a revisar los números.")
+        #expect(try Cleanup.sanitize("Umbrellas are good.", input: "umbrellas are good") == "Umbrellas are good.")
         #expect(throws: Cleanup.Failure.self) {
             try Cleanup.sanitize(String(repeating: "good ", count: 60), input: input)
         }
     }
 
     /// Retention guard: answers and word-dropping rewrites throw, down to a
-    /// single dropped word; the five self-correction pairs stay above 0.7
-    /// (ratios 0.80, 0.83, 0.83, 0.83, 0.88).
+    /// single dropped word; the seven self-correction pairs stay above 0.7
+    /// (ratios 0.80, 0.83, 0.83, 0.83, 0.88, and Spanish 0.86, 0.80).
     @Test func retentionGuardRejectsAnswersAndKeepsCorrections() throws {
         #expect(throws: Cleanup.Failure.self) {
             try Cleanup.sanitize("Call me when you arrive.", input: "please call me when you arrive [pause 900ms]")
@@ -138,6 +142,8 @@ struct CleanupPropertyTests {
             ("send it to john [pause 200ms] no wait actually to mary [pause 900ms]", "Send it to Mary."),
             ("the meeting is on monday [pause 200ms] no wait actually tuesday [pause 900ms]", "The meeting is on Tuesday."),
             ("i want the red one [pause 200ms] no wait actually the blue one [pause 900ms]", "I want the blue one."),
+            ("vamos a la tienda [pause 200ms] no perdón a la farmacia [pause 900ms]", "Vamos a la farmacia."),
+            ("llámame el lunes [pause 200ms] digo el martes [pause 900ms]", "Llámame el martes."),
         ]
         for (input, output) in pairs {
             #expect(Cleanup.retention(output, of: input) >= 0.7, "\(output)")
@@ -147,8 +153,9 @@ struct CleanupPropertyTests {
 
     @Test func promptForbidsRewritingAndTranslating() {
         // Overflow silently costs cleanup (4097 > 4096 seen at runtime), so the
-        // prompt stays short: ~4 chars/token puts 1,400 chars near 350 tokens.
-        #expect(Cleanup.instructions(for: DictationProfile(name: "Default")).count < 1400)
+        // prompt stays short: ~4 chars/token puts 2,200 chars near 550 tokens,
+        // the examples included.
+        #expect(Cleanup.instructions(for: DictationProfile(name: "Default")).count < 2200)
         let prompt = Cleanup.instructions(for: DictationProfile(name: "Default"))
         #expect(prompt.contains("NEVER translate"))
         #expect(prompt.contains("Add punctuation and capitalisation"))
