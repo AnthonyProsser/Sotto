@@ -102,6 +102,7 @@ final class Dictation {
     /// the real gesture asks, exactly as before.
     func arm() {
         guard pipeline == nil, armed == nil, AudioCapture.isAuthorized else { return }
+        Insertion.wakeElectronAccessibility()
         HUDPanel.shared.prepare(.recording(level: 0))
         do {
             armed = try AudioCapture.shared.start(analyzerFormat: audioFormat)
