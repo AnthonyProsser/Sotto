@@ -19,9 +19,10 @@ import os
 /// are per-process and die with the process. A wedged tap must never take the UI down
 /// with it.
 ///
-/// **What it reads.** One keycode is acted on, 61, plus one comparison against 53 for
-/// Escape. `Sotto` is a right-hand program (DECISIONS.md, 2026-08-15), so left Option is
-/// not a trigger. One precision so §2.4's claim stays honest: a
+/// **What it reads.** One modifier keycode is acted on, the chosen `DictationKey`'s,
+/// plus one comparison against 53 for Escape (DECISIONS.md, 2026-09-28). The chosen
+/// key is a right-hand modifier from that enum's fixed list; the left-hand keys are
+/// never triggers. One precision so §2.4's claim stays honest: a
 /// `flagsChanged` subscription cannot be filtered per keycode by the OS, so the callback
 /// is handed every modifier and discards the rest on the next line. Nothing is decoded,
 /// nothing is accumulated, nothing is stored.
@@ -29,7 +30,7 @@ final class EventTap {
     static let shared = EventTap()
 
     private let log = Logger(subsystem: "com.anthonyprosser.Sotto", category: "gestures")
-    private let recognizer = GestureRecognizer()
+    let recognizer = GestureRecognizer()
     private var tap: CFMachPort?
 
     /// §10.4's arbiter, and the only piece of the priority stack that cannot live
@@ -40,22 +41,18 @@ final class EventTap {
     /// one action fires" true rather than hoped for.
     private var abortedThisEvent = false
 
-    private init() {}
+    /// The key the gesture in flight began on. Settings can change `DictationKey.current`
+    /// mid-hold, and filtering the release by the new key would drop it and leave the
+    /// recognizer in push-to-talk, swallowing the keyboard. A new key applies from idle.
+    private var gestureKey = DictationKey.current
 
-    /// The keycodes this file compares against, and the complete list.
+    /// Internal rather than private only so tests can drive a tap that is never installed.
+    init() {}
+
+    /// The keycodes this file compares against, and the complete list: Escape, plus
+    /// whichever single `DictationKey` is chosen. Nothing else is decoded.
     private enum Key {
         static let escape: Int64 = 53
-        static let rightOption: Int64 = 61
-    }
-
-    /// Device-dependent modifier bits, from IOKit's `IOLLEvent.h`. A `flagsChanged`
-    /// event reports the whole modifier state, so `.maskAlternate` cannot tell a Right
-    /// Option press from a Left one, and cannot tell a press from a release while the
-    /// other side is held. This bit can — and clearing it on a synthetic *release* is
-    /// what `rules/input-and-insertion.md` §5.1 warns about, since a release still
-    /// carrying it reads as a second press.
-    private enum DeviceMask {
-        static let rightOption: UInt64 = 0x0000_0040  // NX_DEVICERALTKEYMASK
     }
 
     /// §2.6's tag. Slice 3 posts Cmd+C for the selection fallback and Cmd+V for the
@@ -160,7 +157,7 @@ final class EventTap {
 
     // MARK: - The callback
 
-    private func handle(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
+    func handle(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
         let pass = Unmanaged.passUnretained(event)
 
         // macOS disables a tap whose callback ran long, and says so through the tap
@@ -185,13 +182,12 @@ final class EventTap {
 
         switch type {
         case .flagsChanged:
-            switch keycode {
-            case Key.rightOption:
-                let isDown = flags & DeviceMask.rightOption != 0
-                disposition = recognizer.handle(isDown ? .rightOptionDown : .rightOptionUp)
-            default:
-                return pass // Every other modifier, discarded without being looked at.
+            // Every other modifier is discarded here without being looked at.
+            if recognizer.isIdle { gestureKey = .current }
+            guard let input = gestureKey.input(keycode: keycode, flags: flags) else {
+                return pass
             }
+            disposition = recognizer.handle(input)
         case .keyDown:
             let isEscape = keycode == Key.escape
             abortedThisEvent = false
@@ -214,5 +210,62 @@ final class EventTap {
         }
 
         return disposition == .pass ? pass : nil
+    }
+}
+
+/// The modifier-only keys dictation can live on, and the complete list the tap will ever
+/// compare a `flagsChanged` keycode against (DECISIONS.md, 2026-09-28). Right-hand only:
+/// the left-hand modifiers are held constantly for shortcuts. Fn/Globe is left out — it
+/// is a shared flag rather than a device bit (arrow and function keys set it too), so it
+/// has no clean down/up signal, and macOS's own dictation and emoji shortcuts claim it.
+enum DictationKey: String, CaseIterable, Identifiable {
+    case rightOption, rightCommand, rightControl
+
+    var id: String { rawValue }
+
+    /// The one `UserDefaults` key; the Settings `@AppStorage` and `current` both use it.
+    static let defaultsKey = "DictationKey"
+    static let `default` = DictationKey.rightOption
+
+    /// Read on the tap thread for each modifier event: `UserDefaults` is thread-safe and
+    /// in-memory, so a change in Settings applies to the very next press without relaunch.
+    static var current: DictationKey {
+        UserDefaults.standard.string(forKey: defaultsKey).flatMap(DictationKey.init) ?? .default
+    }
+
+    var title: String {
+        switch self {
+        case .rightOption: "Right Option"
+        case .rightCommand: "Right Command"
+        case .rightControl: "Right Control"
+        }
+    }
+
+    var keycode: Int64 {
+        switch self {
+        case .rightOption: 61
+        case .rightCommand: 54
+        case .rightControl: 62
+        }
+    }
+
+    /// Device-dependent modifier bit, from IOKit's `IOLLEvent.h`. A `flagsChanged` event
+    /// reports the whole modifier state, so the generic `.maskAlternate` cannot tell a
+    /// Right press from a Left one, nor a press from a release while the other side is
+    /// held. This bit can — and clearing it on a synthetic *release* is what
+    /// `rules/input-and-insertion.md` §5.1 warns about.
+    var deviceMask: UInt64 {
+        switch self {
+        case .rightOption: 0x0000_0040  // NX_DEVICERALTKEYMASK
+        case .rightCommand: 0x0000_0010  // NX_DEVICERCMDKEYMASK
+        case .rightControl: 0x0000_2000  // NX_DEVICERCTLKEYMASK
+        }
+    }
+
+    /// The whole of the tap's modifier filter, kept pure so it is testable without a live
+    /// tap: nil for any keycode but this key's.
+    func input(keycode: Int64, flags: UInt64) -> GestureRecognizer.Input? {
+        guard keycode == self.keycode else { return nil }
+        return flags & deviceMask != 0 ? .keyDown : .keyUp
     }
 }

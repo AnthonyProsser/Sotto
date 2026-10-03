@@ -83,7 +83,7 @@ final class Dictation {
 
     // MARK: - The gesture's signals
 
-    /// **Right Cmd went down and nothing is classified yet.** The microphone opens
+    /// **The dictation key went down and nothing is classified yet.** The microphone opens
     /// here and the HUD is composited transparent, so that the ~55 ms of CoreAudio
     /// bring-up and the ~100 ms of buffer fill happen *inside* the 250 ms the user
     /// spends holding the key rather than after it. A hold that becomes a dictation
@@ -92,16 +92,17 @@ final class Dictation {
     ///
     /// **The transcriber is not touched.** A `SpeechTranscriber` module belongs to
     /// one `SpeechAnalyzer` for its lifetime and building one costs real work; a
-    /// speculative analyzer on every Right Cmd press is not a trade worth making.
+    /// speculative analyzer on every key press is not a trade worth making.
     /// The stream is held instead, and handed over at `start()`.
     ///
     /// **It cannot raise the microphone prompt.** §2.4 asks at first use of the
-    /// feature, and an unclassified key-down is not that — a bare Right Cmd would
+    /// feature, and an unclassified key-down is not that — a bare key press would
     /// otherwise put the TCC dialog on screen, and `engine.start()` blocks its
     /// caller until that dialog is answered. Unauthorized, this does nothing and
     /// the real gesture asks, exactly as before.
     func arm() {
         guard pipeline == nil, armed == nil, AudioCapture.isAuthorized else { return }
+        Insertion.wakeElectronAccessibility()
         HUDPanel.shared.prepare(.recording(level: 0))
         do {
             armed = try AudioCapture.shared.start(analyzerFormat: audioFormat)
@@ -147,7 +148,7 @@ final class Dictation {
 
         pipeline = Task { [stream] in
             do {
-                try await Transcription.shared.begin(stream)
+                try await Transcription.shared.begin(stream, language: ProfileStore.shared.active.language)
             } catch {
                 guard !Task.isCancelled else { return }
                 log.error("Transcriber failed to start: \(error.localizedDescription, privacy: .public)")
@@ -172,14 +173,37 @@ final class Dictation {
             do {
                 let draft = try await Transcription.shared.finish()
                 let recording = AudioCapture.shared.takeRecording()
-                deliver(draft)
+                let profile = ProfileStore.shared.active
+                var text = draft.text
+                var cleaned: String?
+                var cleanupFailed = false
+                if profile.cleanupEnabled, !draft.text.isEmpty {
+                    let marked = AudioHistory.mark(draft.text, words: draft.words, pauses: draft.pauses)
+                    do {
+                        let result = try await Cleanup.shared.clean(marked, profile: profile)
+                        if !result.isEmpty {
+                            text = result
+                            cleaned = result
+                        }
+                    } catch Cleanup.Failure.unavailable {
+                        // Configuration state, not a failure: the banner in
+                        // Settings → Dictation owns it, and the dictation
+                        // proceeds like a cleanup-off profile.
+                    } catch {
+                        log.error("Cleanup failed: \(error.localizedDescription, privacy: .public)")
+                        cleanupFailed = true
+                    }
+                }
                 if let recording, !draft.text.isEmpty {
                     AudioHistory.record(
                         draft: draft,
                         buffers: recording.buffers,
-                        format: recording.format
+                        format: recording.format,
+                        cleaned: cleaned,
+                        profile: profile.name
                     )
                 }
+                deliver(text, cleanupFailed: cleanupFailed)
             } catch {
                 AudioCapture.shared.discardRecording()
                 // **A cancelled pipeline is not a failed one.** Escape (either
@@ -243,18 +267,21 @@ final class Dictation {
     /// gone, so the transcript takes the ordinary path and the AX write replaces
     /// whatever was selected. This contradicts §4.9's "selected text is never a
     /// dictation target" — his call, logged, and the spec copy is stale on it.
-    private func deliver(_ draft: Transcription.Draft) {
-        guard !draft.text.isEmpty else {
+    private func deliver(_ text: String, cleanupFailed: Bool) {
+        guard !text.isEmpty else {
             log.notice("Nothing transcribed.")
             finish(with: nil)
             return
         }
 
-        switch Insertion.insert(draft.text) {
+        // A failed cleanup must not take the dictation with it: the raw text
+        // is what gets inserted, and the HUD says the pass failed.
+        let failure: HUDState? = cleanupFailed ? .error("Cleanup failed") : nil
+        switch Insertion.insert(text) {
         case .inserted:
-            finish(with: nil)
+            finish(with: failure)
         case .copied:
-            finish(with: .message("Copied to clipboard"))
+            finish(with: failure ?? .message("Copied to clipboard"))
         case .failed(let reason):
             finish(with: .error(reason))
         }

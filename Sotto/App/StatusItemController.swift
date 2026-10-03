@@ -23,10 +23,12 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 
     private let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
 
-    /// `NSObject` and `NSMenuDelegate` for one reason: the Microphone submenu is
-    /// rebuilt on open, because the device list changes when a headset is plugged
-    /// in and a menu built at launch would be stale by the time it is used.
+    /// `NSObject` and `NSMenuDelegate` for one reason: the Microphone and Profile
+    /// submenus are rebuilt on open, because the device list changes when a
+    /// headset is plugged in and profiles change in Settings — a menu built at
+    /// launch would be stale by the time it is used.
     private let microphones = NSMenu()
+    private let profiles = NSMenu()
 
     private override init() {}
 
@@ -61,7 +63,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         // Switchable state. Each is a submenu in the shipping app; the submenus have
         // nothing to list until the slice that owns them, so they are stubs with the
         // §10.1 labels intact.
-        menu.addItem(stub("Profile", "Profiles arrive in a later build."))
+        menu.addItem(profileItem())
         menu.addItem(microphoneItem())
 
         menu.addItem(.separator())
@@ -92,7 +94,38 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         return item
     }
 
+    // MARK: - Profile (§8.1)
+
+    /// **Switching profiles switches all of it at once** — cleanup, instructions,
+    /// vocabulary. §10.1 puts the switcher here as a single control because it
+    /// changes with task rather than with hardware.
+    private func profileItem() -> NSMenuItem {
+        let item = NSMenuItem(title: "Profile", action: nil, keyEquivalent: "")
+        profiles.delegate = self
+        item.submenu = profiles
+        return item
+    }
+
+    private func rebuildProfiles() {
+        profiles.removeAllItems()
+        let store = ProfileStore.shared
+        for profile in store.profiles {
+            let item = NSMenuItem(
+                title: profile.name,
+                action: #selector(AppDelegate.selectProfile(_:)),
+                keyEquivalent: ""
+            )
+            item.representedObject = profile.id
+            item.state = profile.id == store.activeID ? .on : .off
+            profiles.addItem(item)
+        }
+    }
+
     func menuNeedsUpdate(_ menu: NSMenu) {
+        if menu === profiles {
+            rebuildProfiles()
+            return
+        }
         guard menu === microphones else { return }
         menu.removeAllItems()
 

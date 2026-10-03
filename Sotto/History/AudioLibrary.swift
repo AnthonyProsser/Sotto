@@ -46,9 +46,9 @@ final class AudioLibrary {
         /// What the pane reads. The pause markers come off here (§4.6).
         var raw: String { AudioHistory.unmark(entry.raw) }
 
-        /// `nil` until slice 11 runs a cleanup pass. The toggle in the pane is
-        /// disabled while it is, per §14.7 — a control the user can see, with the
-        /// reason in its tooltip.
+        /// `nil` when the profile had cleanup off or the pass failed. The toggle
+        /// in the pane is disabled while it is, per §14.7 — a control the user
+        /// can see, with the reason in its tooltip.
         var cleaned: String? { entry.cleaned }
 
         /// **The transcript is the title**, truncated by the row rather than by a

@@ -1,0 +1,188 @@
+//
+//  DictationProfile.swift
+//  Sotto
+//
+//  Slice 11. All dictation settings live in profiles — sotto-spec.md §8.1, as
+//  trimmed by DECISIONS.md: no STT picker (Apple Speech only), no cleanup model
+//  picker (SystemLanguageModel or off), no context slider (the Apple model has no
+//  weights or KV for an estimate), language is Detect / Always English / Always Spanish
+//  (DECISIONS.md, 2026-09-28). What remains: language, cleanup on/off, instructions, vocabulary.
+//
+
+import Foundation
+import Observation
+
+/// One named bundle of dictation behavior. Codable so the store is JSON in
+/// UserDefaults; Sendable so the dictation path can read the active one.
+struct DictationProfile: Codable, Sendable, Identifiable, Equatable {
+    var id: String
+    var name: String
+
+    /// §8.1 "Cleanup enabled". Off is the Verbatim behavior: raw text in, raw
+    /// text out, no model pass. The fallback transcriber's locales (§5) have no
+    /// native punctuation, so off means unpunctuated there — said in the pane,
+    /// not discovered as a bug.
+    var cleanupEnabled: Bool
+
+    /// §8.1 "Cleanup instructions". Appended after the base cleanup prompt.
+    var cleanupInstructions: String
+
+    /// §4.8's term list. There is no decoder to inject it into on the Apple
+    /// path, so it rides the cleanup prompt as preferred spellings
+    /// (DECISIONS.md) — which is also why it does nothing when cleanup is off.
+    var vocabulary: [String]
+
+    /// Which locales a dictation listens for (`DECISIONS.md`, 2026-09-28). Detect
+    /// runs English and Spanish and picks by the text; the others run one.
+    enum Language: String, Codable, CaseIterable, Sendable {
+        case detect, english, spanish
+
+        var label: String {
+            switch self {
+            case .detect: "Detect"
+            case .english: "Always English"
+            case .spanish: "Always Spanish"
+            }
+        }
+    }
+
+    var language: Language
+
+    init(
+        id: String = UUID().uuidString,
+        name: String,
+        language: Language = .detect,
+        cleanupEnabled: Bool = true,
+        cleanupInstructions: String = "",
+        vocabulary: [String] = []
+    ) {
+        self.id = id
+        self.name = name
+        self.language = language
+        self.cleanupEnabled = cleanupEnabled
+        self.cleanupInstructions = cleanupInstructions
+        self.vocabulary = vocabulary
+    }
+
+    /// Profiles saved before `language` existed decode as Detect.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        name = try c.decode(String.self, forKey: .name)
+        language = try c.decodeIfPresent(Language.self, forKey: .language) ?? .detect
+        cleanupEnabled = try c.decode(Bool.self, forKey: .cleanupEnabled)
+        cleanupInstructions = try c.decode(String.self, forKey: .cleanupInstructions)
+        vocabulary = try c.decode([String].self, forKey: .vocabulary)
+    }
+}
+
+/// The list and the active id. One store, read by the gesture path, the menu
+/// switcher, and the pane — the same "no second source of truth" rule the
+/// retention keys follow in GeneralPane.
+@MainActor
+@Observable
+final class ProfileStore {
+    static let shared = ProfileStore()
+
+    static let profilesKey = "DictationProfiles.v1"
+    static let activeKey = "ActiveDictationProfileID"
+
+    var profiles: [DictationProfile] {
+        didSet { save() }
+    }
+
+    var activeID: String {
+        didSet { defaults.set(activeID, forKey: Self.activeKey) }
+    }
+
+    /// The profile the gesture path, the import sheet, and the switcher read.
+    /// Falls back to the first profile rather than trapping when the stored id
+    /// names a deleted profile.
+    var active: DictationProfile {
+        profiles.first { $0.id == activeID } ?? profiles[0]
+    }
+
+    private let defaults: UserDefaults
+
+    /// `defaults` is injectable so tests never touch the real profiles.
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        let loaded: [DictationProfile]
+        if let data = defaults.data(forKey: Self.profilesKey),
+           let decoded = try? JSONDecoder().decode([DictationProfile].self, from: data),
+           !decoded.isEmpty
+        {
+            loaded = decoded
+        } else {
+            // One seed, not presets: Anthony chose full-custom over shipped
+            // profiles, so a fresh install starts with a blank Default and the
+            // Add/Duplicate controls do the rest.
+            loaded = [DictationProfile(name: "Default")]
+        }
+        profiles = loaded
+        let stored = defaults.string(forKey: Self.activeKey)
+        activeID = loaded.contains { $0.id == stored } ? stored! : loaded[0].id
+    }
+
+    func update(_ profile: DictationProfile) {
+        guard let index = profiles.firstIndex(where: { $0.id == profile.id }) else { return }
+        profiles[index] = profile
+    }
+
+    /// Names are unique, case-insensitively, and never blank — the menu switcher and
+    /// `AudioEntry.profile` tell profiles apart by name alone. Returns whether it took;
+    /// the pane keeps a rejected name as a draft rather than suffixing it mid-typing.
+    @discardableResult
+    func rename(_ id: String, to name: String) -> Bool {
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, !isTaken(name, except: id),
+              let index = profiles.firstIndex(where: { $0.id == id })
+        else { return false }
+        profiles[index].name = name
+        return true
+    }
+
+    func isTaken(_ name: String, except id: String) -> Bool {
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        return profiles.contains { $0.id != id && $0.name.caseInsensitiveCompare(name) == .orderedSame }
+    }
+
+    func add() {
+        let profile = DictationProfile(name: unusedName(basedOn: "Untitled"))
+        profiles.append(profile)
+        activeID = profile.id
+    }
+
+    func duplicate(_ profile: DictationProfile) {
+        var copy = profile
+        copy.id = UUID().uuidString
+        copy.name = unusedName(basedOn: profile.name)
+        profiles.append(copy)
+        activeID = copy.id
+    }
+
+    /// The last profile cannot go: the gesture path reads `active`
+    /// unconditionally, and zero profiles is a state with no behavior.
+    func delete(_ profile: DictationProfile) {
+        guard profiles.count > 1 else { return }
+        profiles.removeAll { $0.id == profile.id }
+        if activeID == profile.id { activeID = profiles[0].id }
+    }
+
+    private func unusedName(basedOn root: String) -> String {
+        let taken = Set(profiles.map { $0.name.lowercased() })
+        if !taken.contains(root.lowercased()) { return root }
+        var n = 2
+        while taken.contains("\(root) \(n)".lowercased()) { n += 1 }
+        return "\(root) \(n)"
+    }
+
+    private func save() {
+        if let data = try? JSONEncoder().encode(profiles) {
+            defaults.set(data, forKey: Self.profilesKey)
+        }
+        if !profiles.contains(where: { $0.id == activeID }), let first = profiles.first {
+            activeID = first.id
+        }
+    }
+}

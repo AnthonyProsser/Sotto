@@ -196,10 +196,10 @@ Five things that hold no matter what you are touching.
 
 **Predict, don't gate.** Hardware never gates a feature; it produces an estimate and an amber row. The one exception is model capability, and it gates on the model, not the machine. Detail in `rules/models-and-network.md` §1.
 
-**Two things are undecided, and inventing an answer to one produces something that looks settled and is not.** Ask. The names are here rather than behind the pointer because the failure is answering a question you did not know existed — a pointer only helps a reader who already suspects. Reasoning in `rules/open-questions.md`; which slice hits which in `rules/slices.md` §4.
+**One thing is undecided, and inventing an answer to one produces something that looks settled and is not.** Ask. The names are here rather than behind the pointer because the failure is answering a question you did not know existed — a pointer only helps a reader who already suspects. Reasoning in `rules/open-questions.md`; which slice hits which in `rules/slices.md` §4.
 
 > Gap **2**, the **HUD's** anchor number — its form is settled (a constant distance from the top of `NSScreen.frame`), the number is not. The overlay's half closed 2026-08-26.
-> Issues: **4** cleanup reasoning toggle and default. **Issue 1**, the MCP Swift SDK vs. the protocol version, is **moot as of 2026-09-18** — there is no MCP.
+> Issues: none open. **Issue 4**, cleanup reasoning, **closed 2026-09-28** — the on-device model has no reasoning mode to toggle. **Issue 1**, the MCP Swift SDK vs. the protocol version, is **moot as of 2026-09-18** — there is no MCP.
 > Numbers track spec §12 and never get renumbered. **Closed and staying closed:** issue 2, the SwiftUI/AppKit split (2026-08-15); gap 1, the chat's shape (2026-08-27); gap 3, the send button (2026-08-27); issue 3, focus change mid-transcription (2026-08-27); issue 5, bare compose bar growth (2026-08-27). All in `DECISIONS.md`.
 
 ---
@@ -224,10 +224,10 @@ Also gone: the Out-of-scope section, insert-mode in profiles, and the zero-outbo
 
 | | |
 |---|---|
-| Gestures | Hold **Right Option** → push-to-talk. Double-tap **Right Option** → latched. **Both are dictation and there is no third gesture** (2026-09-18). A dictation fired with text selected replaces the selection |
+| Gestures | Hold the dictation key (default **Right Option**, configurable from a short modifier-only list) → push-to-talk. Double-tap it → latched. **Both are dictation and there is no third gesture** (2026-09-18). A dictation fired with text selected replaces the selection |
 | STT | Apple `SpeechAnalyzer` / `SpeechTranscriber`, **the only v1 backend**; `DictationTranscriber` past its 30 locales. Runs on the ANE, shared with cleanup |
 | LLM | Apple `SystemLanguageModel`, for cleanup and nothing else. **No model list, no downloads, no MLX, no OpenAI-compatible adapter** (2026-09-18) |
-| VAD | `SpeechDetector`, preinstalled |
+| VAD | None: pauses are gaps between word timings. `SpeechDetector` returns nothing on macOS 27 (2026-09-29) |
 | Reference machine | MacBook Neo, 8 GB unified memory — the development target, not a runtime floor |
 | Memory estimate | Gone with the model list — Apple's model has no weights to estimate |
 | Permissions | Accessibility, Input Monitoring, Microphone at first run. **Screen Recording is no longer asked for at all** — the screenshot gesture was the overlay's. No Notifications, ever |

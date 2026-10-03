@@ -157,7 +157,7 @@ final class HUDPanel {
 
     // MARK: - Showing
 
-    /// **The armed window's half of the show.** Right Cmd is down and nothing is
+    /// **The armed window's half of the show.** The dictation key is down and nothing is
     /// classified yet, so the surface is put on screen fully transparent: the
     /// window server composites it, the glass rasterises, and the waveform starts
     /// tracking the level — all of it inside the 250 ms the user is holding the
@@ -228,7 +228,7 @@ final class HUDPanel {
         // the panel goes away again.
         //
         // **Held so a gesture landing inside the window can cancel it.** Arming
-        // fires on every Right Cmd press, so a press about half a second after
+        // fires on every dictation-key press, so a press about half a second after
         // launch reaches `prepare(_:)` while this is still pending, and an
         // uncancellable teardown ordered the panel out from under a live
         // dictation. It also no longer clears `running`: `warm()` never sets it,

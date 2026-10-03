@@ -7,10 +7,10 @@
 
 import Foundation
 
-/// Everything slice 2 produces. Both dictation gestures live on Right Option;
-/// there is no second key and no second surface to signal.
+/// Everything slice 2 produces. Both dictation gestures live on the one
+/// `DictationKey` the user chose; there is no second key and no second surface to signal.
 enum GestureSignal: String {
-    /// Right Option went down and nothing is classified yet. Slice 3 opens the
+    /// the dictation key went down and nothing is classified yet. Slice 3 opens the
     /// microphone speculatively on this, so that a hold that becomes a dictation
     /// already has the lead-in audio the user spoke over the 250 ms threshold.
     /// **It is not a recording** — `disarm` throws the audio away.
@@ -37,8 +37,8 @@ final class GestureRecognizer {
     /// What the tap should do with the event that produced this transition.
     enum Disposition { case pass, swallow }
 
-    enum Input {
-        case rightOptionDown, rightOptionUp
+    enum Input: Equatable {
+        case keyDown, keyUp
         case otherKeyDown(isEscape: Bool)
         case otherKeyUp
     }
@@ -57,7 +57,7 @@ final class GestureRecognizer {
 
     private enum State {
         case idle
-        /// Right Option is down and under the hold threshold — still unclassified.
+        /// the dictation key is down and under the hold threshold — still unclassified.
         case armed
         /// Crossed the threshold with the key still down. This is the only state that
         /// consumes, and the whole of what "consumed" means.
@@ -65,8 +65,8 @@ final class GestureRecognizer {
         /// Released under the threshold; the second-tap window is open.
         case awaitingSecond
         case latched
-        /// Right Option down again during a latched session: a stop on release, unless
-        /// a chord arrives first and reveals it was Option+something.
+        /// the dictation key down again during a latched session: a stop on release, unless
+        /// a chord arrives first and reveals it was modifier+something.
         case latchedTap
         /// Aborted while the key is still physically down. Its release does nothing —
         /// §4.1's "the user should never have to think about how to let go."
@@ -81,12 +81,15 @@ final class GestureRecognizer {
         didSet { generation &+= 1 }
     }
 
+    /// Whether a new gesture may begin — `EventTap` re-reads the chosen key only here.
+    var isIdle: Bool { state == .idle }
+
     func handle(_ input: Input) -> Disposition {
         switch input {
-        case .rightOptionDown:
-            return rightOptionDown()
-        case .rightOptionUp:
-            return rightOptionUp()
+        case .keyDown:
+            return keyDown()
+        case .keyUp:
+            return keyUp()
         case .otherKeyDown(let isEscape):
             return otherKeyDown(isEscape: isEscape)
         case .otherKeyUp:
@@ -96,9 +99,9 @@ final class GestureRecognizer {
         }
     }
 
-    // MARK: - Right Option
+    // MARK: - The dictation key
 
-    private func rightOptionDown() -> Disposition {
+    private func keyDown() -> Disposition {
         switch state {
         case .idle:
             state = .armed
@@ -117,13 +120,13 @@ final class GestureRecognizer {
         }
 
         // **Never consumed here.** Consumption starts at the threshold, which is what
-        // leaves Option-as-a-modifier working — Option+e and every other dead key still
+        // leaves the key working as a modifier — with Option, Option+e and every other dead key still
         // reach the app, because at this point the press is not yet a dictation
-        // (DECISIONS.md, 2026-08-15, carried over from Right Cmd).
+        // (DECISIONS.md, 2026-08-15).
         return .pass
     }
 
-    private func rightOptionUp() -> Disposition {
+    private func keyUp() -> Disposition {
         switch state {
         case .armed:
             state = .awaitingSecond
@@ -146,7 +149,7 @@ final class GestureRecognizer {
         }
 
         // **Always passes**, including out of `pushToTalk`. Swallowing this one event
-        // leaves every app on the machine believing Option is still held, with nothing
+        // leaves every app on the machine believing the key is still held, with nothing
         // later to correct it.
         return .pass
     }
@@ -181,7 +184,7 @@ final class GestureRecognizer {
             // The hold owns the keyboard until it ends (DECISIONS.md, 2026-08-15).
             return .swallow
         case .latchedTap:
-            state = .latched // Option+something during a latched session is not a stop.
+            state = .latched // Modifier+something during a latched session is not a stop.
         case .idle, .latched, .spent:
             break
         }

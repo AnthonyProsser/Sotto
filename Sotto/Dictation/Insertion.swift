@@ -65,17 +65,25 @@ enum Insertion {
     /// behaviour when they see it. Unsupported everywhere else, where the set call
     /// fails and costs nothing — hence no app check.
     ///
-    /// **Fired on the failed read, and deliberately not retried here.** The tree
-    /// takes about a second to build, and this call sits on the main thread at the
-    /// moment the user is waiting for their text. It does not need to block:
-    /// `selectedText()` runs the same lookup when the gesture arms (§4.9), so the
-    /// switch is thrown while the user is still speaking and the tree is up long
-    /// before `insert()` asks again.
-    private static func wakeElectronAccessibility() {
+    /// **Fired when the gesture arms**, from `Dictation.arm()`, so the tree is
+    /// built while the user is still speaking. The tree takes about a second to
+    /// build, and `insert()` runs at the moment the user is waiting for their
+    /// text. This used to ride on `selectedText()`'s arm-time lookup; that call
+    /// went with selection routing on 2026-09-18, and from then on the tree was
+    /// switched on only by a failed read inside `insert()`, which copied to the
+    /// clipboard instead of inserting. Also fired on that failed read, in case
+    /// the user switched apps after arming.
+    ///
+    /// Off the main thread: the key-down path should not wait on another app's
+    /// accessibility server.
+    static func wakeElectronAccessibility() {
         guard let frontmost = NSWorkspace.shared.frontmostApplication else { return }
-        let app = AXUIElementCreateApplication(frontmost.processIdentifier)
-        AXUIElementSetMessagingTimeout(app, 1.0)
-        AXUIElementSetAttributeValue(app, "AXManualAccessibility" as CFString, kCFBooleanTrue)
+        let pid = frontmost.processIdentifier
+        DispatchQueue.global(qos: .userInitiated).async {
+            let app = AXUIElementCreateApplication(pid)
+            AXUIElementSetMessagingTimeout(app, 1.0)
+            AXUIElementSetAttributeValue(app, "AXManualAccessibility" as CFString, kCFBooleanTrue)
+        }
     }
 
     /// §3's test: `AXRole` is `AXTextField`/`AXTextArea`, **or** `AXValue` is
@@ -122,7 +130,12 @@ enum Insertion {
     /// **No read means no space**, which is the safe direction: a missing space is
     /// a keystroke to fix, a spurious one appears in text the user did not touch.
     private static func leadingSpace(for element: AXUIElement) -> String {
-        guard let preceding = characterBeforeCaret(element) else { return "" }
+        leadingSpace(after: characterBeforeCaret(element))
+    }
+
+    /// The rule itself, apart from the Accessibility read, so it can be tested.
+    static func leadingSpace(after preceding: Character?) -> String {
+        guard let preceding else { return "" }
         guard !preceding.isWhitespace, !"([{<\u{201C}\u{2018}\"'".contains(preceding) else { return "" }
         return " "
     }
@@ -151,57 +164,6 @@ enum Insertion {
         return (result as? String)?.last
     }
 
-    // MARK: - Selection (§3, §4.9)
-
-    /// `AXSelectedText` on the **focused element only**. Reading only the focused
-    /// element is what keeps §4.9 tolerable — a stale selection in a background
-    /// window cannot hijack a dictation.
-    ///
-    /// **The synthetic Cmd+C fallback runs only when the attribute is absent**,
-    /// which is the Electron and browser case §3 names. It is gated that tightly
-    /// because it costs a clipboard round-trip on a surface the user is about to
-    /// dictate into, and the pasteboard restore it needs is the same lossy one
-    /// that makes paste the second insertion strategy rather than the first.
-    static func selectedText() async -> String? {
-        guard let element = focusedElement() else { return nil }
-
-        var value: CFTypeRef?
-        let status = AXUIElementCopyAttributeValue(
-            element, kAXSelectedTextAttribute as CFString, &value
-        )
-        if status == .success {
-            let selected = value as? String ?? ""
-            return selected.isEmpty ? nil : selected
-        }
-
-        return await copyViaClipboard()
-    }
-
-    /// `async` rather than blocking: the poll below spans up to 300 ms, and this
-    /// runs while capture is already going. A `usleep` on the main actor would
-    /// stall the waveform for the first third of a second of every dictation into
-    /// an app that needs the fallback.
-    private static func copyViaClipboard() async -> String? {
-        let pasteboard = NSPasteboard.general
-        let saved = snapshot(pasteboard)
-        let before = pasteboard.changeCount
-        defer { restore(saved, to: pasteboard) }
-
-        post(keyCode: Key.c)
-
-        // Polled rather than slept: an app that answers in 20 ms should not cost
-        // the same as one that answers in 200.
-        let deadline = Date().addingTimeInterval(0.3)
-        while Date() < deadline {
-            if pasteboard.changeCount != before {
-                let copied = pasteboard.string(forType: .string)
-                return copied?.isEmpty == false ? copied : nil
-            }
-            try? await Task.sleep(for: .milliseconds(10))
-        }
-        return nil
-    }
-
     // MARK: - Insertion
 
     /// The ladder. Returns what the HUD should say.
@@ -211,7 +173,13 @@ enum Insertion {
     /// storage, and a paste is one `NSUndoManager` group. Nothing here types
     /// character by character, which is the shape that would break it.
     static func insert(_ text: String) -> Outcome {
-        guard let element = focusedElement(), isWritable(element) else {
+        let focused = focusedElement()
+        guard let element = focused, isWritable(element) else {
+            // Which app and which role, never the text: the line that says why a
+            // dictation copied instead of inserting.
+            let role = focused.flatMap { attribute($0, kAXRoleAttribute) as String? } ?? "none"
+            let app = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "unknown"
+            log.notice("No writable field (focused role \(role, privacy: .public) in \(app, privacy: .public)); copied to clipboard.")
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(text, forType: .string)
             return .copied
@@ -269,7 +237,6 @@ enum Insertion {
     // MARK: - Synthetic events (§2.6)
 
     private enum Key {
-        static let c: CGKeyCode = 8
         static let v: CGKeyCode = 9
     }
 
