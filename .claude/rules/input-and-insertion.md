@@ -36,6 +36,8 @@ Post to `.cgAnnotatedSessionEventTap`, **not** the HID tap — that is what deli
 
 **A space goes in front of the transcript when the caret sits hard against the previous word (2026-08-19).** Read the character before the caret with `AXSelectedTextRange` + `AXStringForRange` — one character, never `AXValue`, for the same document-can-be-a-book reason the write is measured with `AXNumberOfCharacters`. Space unless it is whitespace or an opener. **Compute it before the ladder picks a rung** so paste and AX agree, and **never on the clipboard path**. No read means no space: a missing space is one keystroke, a spurious one is an edit to text the user did not touch.
 
+**The paste rung restores the user's clipboard only once it has seen the paste land (2026-10-23).** `AXNumberOfCharacters` changed and the pasteboard's `changeCount` untouched, polled for 2 s; otherwise the transcript stays on the clipboard and the outcome is `.copied`. A timed restore pasted the user's stale clipboard into a slow app. The dictation pipeline is serial, so one paste never overlaps another's restore.
+
 **No focused field → clipboard and stop (§3).** Never paste into whatever happens to be frontmost. The HUD's waveform morphs into "Copied to clipboard" and fades — that confirmation is the entire reason this path is safe.
 
 **The CGEvent Unicode strategy is deleted — do not resurrect it.** It existed to serve the human-typing MCP, which is now a separate unrelated project. As an out-of-process MCP it cannot post keystrokes under Sotto's Accessibility grant anyway, so there was nothing left for the strategy to serve.

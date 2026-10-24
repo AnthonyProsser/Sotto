@@ -32,6 +32,7 @@ final class EventTap {
     private let log = Logger(subsystem: "com.anthonyprosser.Sotto", category: "gestures")
     let recognizer = GestureRecognizer()
     private var tap: CFMachPort?
+    private var runLoop: CFRunLoop?
 
     /// §10.4's arbiter, and the only piece of the priority stack that cannot live
     /// on the main actor: priority 1 is the recognizer's, it runs on this thread,
@@ -88,8 +89,10 @@ final class EventTap {
             // The same stop-and-discard `abort` performs. There is one discard
             // path and this is it.
             Dictation.shared.abort()
-        case .pushToTalk, .latched:
-            Dictation.shared.start()
+        case .pushToTalk:
+            Dictation.shared.start(latched: false)
+        case .latched:
+            Dictation.shared.start(latched: true)
         case .stop:
             Dictation.shared.stop()
         case .abort:
@@ -97,9 +100,17 @@ final class EventTap {
         }
     }
 
+    /// `GestureRecognizer.endLatch()`, on the only thread the recognizer is touched from.
+    func endLatch() {
+        guard let runLoop else { return }
+        CFRunLoopPerformBlock(runLoop, CFRunLoopMode.commonModes.rawValue) { [self] in recognizer.endLatch() }
+        CFRunLoopWakeUp(runLoop)
+    }
+
     // MARK: - The thread
 
     private func run() {
+        runLoop = CFRunLoopGetCurrent()
         // Assigned here rather than in `install()` on purpose: the timer has to land on
         // *this* runloop. Scheduled onto the main one it would fire on a thread the
         // state machine is never touched from; scheduled onto a runloop nobody runs, it

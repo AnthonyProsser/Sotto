@@ -296,7 +296,8 @@ No global error token, central error vocabulary, notification, or modal. Errors 
 
 | Failure | Surface |
 |---|---|
-| Transcription, audio model load, cleanup failing **mid-pass**, AX write | HUD (§4.5) |
+| Transcription, audio model load, AX write | HUD (§4.5) |
+| Cleanup failing **mid-pass** | The log only — the rule-cleaned text (`Cleanup.tidy`) is inserted (2026-10-24), and an error beside inserted text reads as the dictation failing (2026-10-23, `DECISIONS.md`) |
 | Cleanup model **unavailable** — `SystemLanguageModel.availability != .available` | Settings → Dictation, with a banner naming the reason. There is no picker beside it any more, so the banner is the whole surface |
 | ~~Chat model load, generation, tool call~~ | Gone 2026-09-18 with the chat layer |
 | File transcription | Main window, Audio pane |
