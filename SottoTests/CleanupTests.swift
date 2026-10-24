@@ -64,6 +64,35 @@ struct CleanupTests {
         #expect(try JSONDecoder().decode(DictationProfile.self, from: data) == profile)
     }
 
+    // MARK: - Rules (no model)
+
+    @Test func tidyResolvesCorrectionsAndDropsDisfluencies() {
+        #expect(Cleanup.tidy("Let's meet at 3, [pause 200ms] no, wait, actually 4. [pause 900ms]") == "Let's meet at 4.")
+        #expect(Cleanup.tidy("Eh, llámame el lunes, no, perdón, el martes.") == "Llámame el martes.")
+        #expect(Cleanup.tidy("Um, I, I think we should, uh, ship it.") == "I think we should ship it.")
+        #expect(Cleanup.tidy("the report is finished [pause 900ms] i will send it tomorrow") == "The report is finished. I will send it tomorrow")
+    }
+
+    @Test func tidyKeepsMeaning() {
+        for kept in [
+            "I would like a coffee.",
+            "It looks like it is broken.",
+            "What is the capital of France?",
+            "I actually like it.",
+            "No, I said Tuesday.",
+        ] {
+            #expect(Cleanup.tidy(kept) == kept)
+        }
+    }
+
+    @Test func modelOnlyForWhatRulesCannotDo() {
+        let plain = DictationProfile(name: "Default")
+        #expect(!Cleanup.needsModel("We should ship it, I think. [pause 900ms]", profile: plain))
+        #expect(!Cleanup.needsModel("Test 123", profile: plain))
+        #expect(Cleanup.needsModel("we should ship it i think [pause 900ms]", profile: plain))
+        #expect(Cleanup.needsModel("We should ship it.", profile: DictationProfile(name: "V", vocabulary: ["Sotto"])))
+    }
+
     // MARK: - Chunked cleanup (no model)
 
     @Test func shortTranscriptIsOneChunk() {
