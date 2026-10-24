@@ -146,14 +146,7 @@ enum Insertion {
     /// drags the whole document across the AX boundary, and the document can be a
     /// book.
     private static func characterBeforeCaret(_ element: AXUIElement) -> Character? {
-        var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(
-            element, kAXSelectedTextRangeAttribute as CFString, &value
-        ) == .success,
-            let raw = value, CFGetTypeID(raw) == AXValueGetTypeID() else { return nil }
-
-        var caret = CFRange()
-        guard AXValueGetValue(raw as! AXValue, .cfRange, &caret), caret.location > 0 else { return nil }
+        guard let caret = selectedRange(element), caret.location > 0 else { return nil }
 
         var preceding = CFRange(location: caret.location - 1, length: 1)
         guard let parameter = AXValueCreate(.cfRange, &preceding) else { return nil }
@@ -162,6 +155,26 @@ enum Insertion {
             element, kAXStringForRangeParameterizedAttribute as CFString, parameter, &result
         ) == .success else { return nil }
         return (result as? String)?.last
+    }
+
+    private static func selectedRange(_ element: AXUIElement) -> CFRange? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(
+            element, kAXSelectedTextRangeAttribute as CFString, &value
+        ) == .success,
+            let raw = value, CFGetTypeID(raw) == AXValueGetTypeID() else { return nil }
+        var range = CFRange()
+        return AXValueGetValue(raw as! AXValue, .cfRange, &range) ? range : nil
+    }
+
+    /// What a write is measured by: the field's length, then where its selection
+    /// sits. Length alone misses a selection replaced by text of the same length —
+    /// a dictation fired over a selection replaces it (2026-09-18) — and the caret
+    /// landing after the new text is what still tells. Nil when the field reports
+    /// no length: nothing can be measured.
+    private static func measure(_ element: AXUIElement) -> [Int]? {
+        guard let length: Int = attribute(element, kAXNumberOfCharactersAttribute) else { return nil }
+        return selectedRange(element).map { [length, $0.location, $0.length] } ?? [length]
     }
 
     // MARK: - Insertion
@@ -196,25 +209,22 @@ enum Insertion {
         //    Believing the status there loses the text with no error anywhere,
         //    which is the one outcome §4.5 rules out.
         //
-        //    `AXNumberOfCharacters` is the check because it is an integer: the
-        //    obvious alternative, reading `AXValue` before and after, copies the
-        //    whole document across the AX boundary twice on every dictation, and
-        //    the document can be a book. A same-length replacement would defeat
-        //    it and cannot arise here — a selection routes to chat (§4.9), so
-        //    insertion always runs against a bare caret.
+        //    `measure` is the check because it is three integers: the obvious
+        //    alternative, reading `AXValue` before and after, copies the whole
+        //    document across the AX boundary twice on every dictation, and the
+        //    document can be a book.
         let text = leadingSpace(for: element) + text
-        let before: Int? = attribute(element, kAXNumberOfCharactersAttribute)
+        let before = measure(element)
         if AXUIElementSetAttributeValue(
             element, kAXSelectedTextAttribute as CFString, text as CFTypeRef
         ) == .success,
-           let before, let after: Int = attribute(element, kAXNumberOfCharactersAttribute),
-           after != before {
+           let before, let after = measure(element), after != before {
             return .inserted
         }
 
         // 2. Clipboard paste.
         log.notice("AX write did not land; falling back to paste.")
-        return await paste(text, into: element, measuredAt: before)
+        return await paste(text, into: element)
     }
 
     /// **The user's clipboard goes back only once the paste is seen landing**
@@ -223,33 +233,42 @@ enum Insertion {
     /// slow app had read — which pasted the user's stale clipboard in place of the
     /// transcript. Not seen landing, the transcript stays on the clipboard: a lost
     /// clipboard item is recoverable, a wrong paste into someone's document is not.
-    private static func paste(_ text: String, into element: AXUIElement, measuredAt before: Int?) async -> Outcome {
+    /// A field with no length cannot be watched, so it reports `.copied` too: the
+    /// paste may have landed, and the transcript is on the clipboard either way.
+    private static func paste(_ text: String, into element: AXUIElement) async -> Outcome {
         let pasteboard = NSPasteboard.general
         let saved = snapshot(pasteboard)
         pasteboard.clearContents()
         guard pasteboard.setString(text, forType: .string) else { return .failed("Couldn’t insert text") }
         let written = pasteboard.changeCount
+        // Measured now, not before the AX write: a write that landed late would
+        // otherwise read as this paste landing, and restore before it is read.
+        guard let before = measure(element) else {
+            post(keyCode: Key.v)
+            log.notice("Paste posted into a field with no length; transcript left on the clipboard.")
+            return .copied
+        }
         let posted = ContinuousClock.now
         post(keyCode: Key.v)
 
-        guard let before else {
-            log.notice("Paste posted into a field with no length; transcript left on the clipboard.")
-            return .inserted
-        }
-        for _ in 0..<Self.pasteChecks {
-            guard (try? await Task.sleep(for: .milliseconds(50))) != nil else { break }
-            guard pasteboard.changeCount == written else {
-                log.notice("Clipboard changed during the paste; not restored.")
-                return .inserted
+        // Its own task, so cancelling the dictation cannot cut the watch short:
+        // the paste is already posted, and the clipboard is still owed back.
+        return await Task {
+            for _ in 0..<Self.pasteChecks {
+                try? await Task.sleep(for: .milliseconds(50))
+                guard pasteboard.changeCount == written else {
+                    log.notice("Clipboard changed during the paste; not restored.")
+                    return .inserted
+                }
+                if let after = measure(element), after != before {
+                    restore(saved, to: pasteboard)
+                    log.notice("Paste landed in \((ContinuousClock.now - posted).ms, privacy: .public) ms; clipboard restored.")
+                    return .inserted
+                }
             }
-            if let after: Int = attribute(element, kAXNumberOfCharactersAttribute), after != before {
-                restore(saved, to: pasteboard)
-                log.notice("Paste landed in \((ContinuousClock.now - posted).ms, privacy: .public) ms; clipboard restored.")
-                return .inserted
-            }
-        }
-        log.notice("Paste not seen landing; transcript left on the clipboard.")
-        return .copied
+            log.notice("Paste not seen landing; transcript left on the clipboard.")
+            return .copied
+        }.value
     }
 
     /// Fifty milliseconds apart, so two seconds in all — slow enough targets

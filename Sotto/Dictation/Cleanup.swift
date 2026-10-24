@@ -91,6 +91,10 @@ final class Cleanup {
     /// (DECISIONS.md, 2026-10-24). A model pass that is unavailable, fails or is
     /// rejected inserts the tidied text, never the raw.
     ///
+    /// `locale` is the recording's (`Draft.locales.first`). The rules are English and
+    /// Spanish, so any other locale gets the model alone, as before them, and the
+    /// unmarked transcript when it cannot run.
+    ///
     /// A fresh session per model pass: sessions accumulate transcript, and a
     /// previous dictation's text must never sit in the next one's context — nor
     /// overflow the 4096-token window. The prewarmed `next` session is fresh
@@ -104,10 +108,12 @@ final class Cleanup {
     func clean(
         _ marked: String,
         profile: DictationProfile,
+        locale: String? = nil,
         instructions: String? = nil
     ) async throws -> String {
-        let tidied = Self.tidy(marked)
-        guard instructions != nil || Self.needsModel(marked, profile: profile) else { return tidied }
+        let rules = Self.rulesCover(locale)
+        let tidied = rules ? Self.tidy(marked) : AudioHistory.unmark(marked)
+        guard instructions != nil || !rules || Self.needsModel(marked, profile: profile) else { return tidied }
         if unavailabilityReason != nil {
             return tidied
         }
@@ -145,11 +151,18 @@ final class Cleanup {
             let text = try await session.respond(to: prompt, options: options).content
             // Sizes and time only, never the text.
             log.notice("Cleanup pass: \((ContinuousClock.now - started).ms, privacy: .public) ms, \(staged ? "staged" : "cold", privacy: .public) session, \(marked.count, privacy: .public) → \(text.count, privacy: .public) chars.")
-            return Self.tidy(try Self.sanitize(text, input: marked))
+            let sanitized = try Self.sanitize(text, input: marked)
+            return rules ? Self.tidy(sanitized) : sanitized
         } catch {
             log.error("Cleanup model pass failed, rules only: \(String(describing: error), privacy: .public)")
             return tidied
         }
+    }
+
+    /// Whether `tidy`'s word lists speak this locale. Nil is a caller with no
+    /// recording behind it — the tests and the bench — and they dictate English.
+    nonisolated static func rulesCover(_ locale: String?) -> Bool {
+        locale.map { ["en", "es"].contains(Locale(identifier: $0).language.languageCode?.identifier) } ?? true
     }
 
     /// What the rules cannot do: a profile's own instructions or vocabulary, and

@@ -132,7 +132,12 @@ final class Dictation {
     private static let latchedSilence = Duration.seconds(60)
 
     func start(latched: Bool) {
-        guard pipeline == nil else { return }
+        guard pipeline == nil else {
+            // A double-tap during the last dictation's tail starts nothing, so its
+            // latch must not wait for a stop tap that would stop nothing.
+            if latched { EventTap.shared.endLatch() }
+            return
+        }
         let started = ContinuousClock.now
 
         Activity.shared.set(.recording, true)
@@ -156,6 +161,7 @@ final class Dictation {
                 // A `nil` message is the permission-prompt case: the question is on
                 // screen, and a HUD error behind it would be Sotto complaining about
                 // something the user is in the middle of answering.
+                if latched { EventTap.shared.endLatch() }
                 finish(with: Self.message(for: error).map(HUDState.error))
                 return
             }
@@ -173,6 +179,10 @@ final class Dictation {
             do {
                 state = try await dictate(stream, released: released, latched: latched, started: started)
             } catch {
+                // Still capturing means the latch is this dictation's and the user
+                // never tapped to end it. Once capture has stopped the recognizer
+                // has moved on, and may already hold the next dictation's latch.
+                let ownsLatch = latched && capturing
                 // Whatever the analyzers were doing, they stop here — a `begin`
                 // that threw halfway leaves a lane running, and a cancelled
                 // pipeline is the one the next `start()` is waiting on.
@@ -183,6 +193,7 @@ final class Dictation {
                 // the next dictation.
                 guard !Task.isCancelled else { return }
                 AudioCapture.shared.discardRecording()
+                if ownsLatch { EventTap.shared.endLatch() }
                 log.error("Transcription failed: \(error.localizedDescription, privacy: .public)")
                 state = Self.message(for: error).map(HUDState.error)
             }
@@ -213,8 +224,12 @@ final class Dictation {
     /// **One discard path, and this is it.** `disarm` routes here rather than
     /// growing a second one; the difference between the two cases is only which of
     /// `pipeline` and `armed` was live, and `cancelPipeline` already handles both.
+    ///
+    /// **Only while the microphone is open.** A tap during the last dictation's
+    /// tail still disarms, and cancelling that tail would throw away text the
+    /// user finished speaking; Escape priority 2 is the way to do that.
     func abort() {
-        guard pipeline != nil || armed != nil else { return }
+        guard capturing || armed != nil else { return }
         armed = nil
         cancelPipeline()
         finish(with: nil)
@@ -269,6 +284,9 @@ final class Dictation {
 
         let stopped = ContinuousClock.now
         let draft = try await Transcription.shared.finish()
+        // Cancelled while finalizing, the capture's buffers may already be the
+        // next dictation's: `start()` resets them before that pipeline waits on this one.
+        try Task.checkCancellation()
         let finalized = ContinuousClock.now
         let recording = AudioCapture.shared.takeRecording()
         let profile = ProfileStore.shared.active
@@ -278,7 +296,7 @@ final class Dictation {
         if profile.cleanupEnabled, !draft.text.isEmpty {
             let marked = AudioHistory.mark(draft.text, words: draft.words, pauses: draft.pauses)
             do {
-                let result = try await Cleanup.shared.clean(marked, profile: profile)
+                let result = try await Cleanup.shared.clean(marked, profile: profile, locale: draft.locales.first)
                 cleanup = "accepted"
                 if !result.isEmpty {
                     text = result
@@ -351,8 +369,12 @@ final class Dictation {
     private func stopWhenQuiet() async {
         while (try? await Task.sleep(for: .seconds(5))) != nil {
             guard Transcription.shared.quiet >= Self.latchedSilence else { continue }
+            guard capturing else { return }
             log.notice("Latched dictation went quiet; stopping.")
             stop()
+            // The latch ended without the user's tap; the recognizer must not
+            // spend their next tap stopping it.
+            EventTap.shared.endLatch()
             return
         }
     }
@@ -370,9 +392,6 @@ final class Dictation {
         armed = nil
         capturing = false
         release = nil
-        // A latch that ended here rather than on the user's tap — the auto-stop,
-        // or a failure — must not leave the recognizer waiting for that tap.
-        EventTap.shared.endLatch()
         // **The one exit closes the microphone too.** `finish` is reachable from
         // `start()`'s catch with capture already running — `begin` throwing left
         // the engine live, `pipeline` nil, and the release that followed rejected

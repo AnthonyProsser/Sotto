@@ -80,9 +80,33 @@ struct CleanupTests {
             "What is the capital of France?",
             "I actually like it.",
             "No, I said Tuesday.",
+            // Each of these lost words to an earlier version of the rules (PR 32 review).
+            "Hi John, sorry I'm late.",
+            "I'm late, sorry about that.",
+            "It was fine, actually pretty good.",
+            "That's not what I mean. We should go.",
+            "We were told there's no wait at the clinic today.",
+            "As you know, the meeting is Monday.",
+            "It tastes like chicken.",
+            "Does she like it?",
+            "Kids like candy.",
+            "Te dije, espera aquí.",
+            "Buenos días a todos, perdón por la demora.",
+            "I had had enough.",
+            "The code is 4 4 7 1.",
+            "It's fine, I mean, whatever works.",
         ] {
             #expect(Cleanup.tidy(kept) == kept)
         }
+        #expect(Cleanup.tidy("Send it Monday, no wait, Tuesday.") == "Send it Tuesday.")
+        #expect(Cleanup.tidy("It was, like, huge.") == "It was huge.")
+        #expect(Cleanup.tidy("It was, you know, fine.") == "It was fine.")
+    }
+
+    @Test func rulesOnlyForEnglishAndSpanish() {
+        #expect(Cleanup.rulesCover("en_US") && Cleanup.rulesCover("es_ES") && Cleanup.rulesCover(nil))
+        // "um", "er", "die die": Portuguese and German words the English lists would delete.
+        #expect(!Cleanup.rulesCover("de_DE") && !Cleanup.rulesCover("pt_BR"))
     }
 
     @Test func modelOnlyForWhatRulesCannotDo() {

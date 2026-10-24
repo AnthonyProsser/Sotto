@@ -33,23 +33,10 @@ private enum Rules {
     /// A pause this long with no punctuation ends the sentence.
     static let pauseMs = 600
     static let fillers: Set<String> = ["um", "uh", "uhm", "umm", "erm", "er", "eh", "hmm", "mm", "em"]
-    /// Words before a "like" that make it a verb or a comparison, so it stays.
-    static let likeKeepPrev: Set<String> = [
-        "look", "looks", "looked", "looking", "things", "stuff", "they're", "maybe",
-        "feel", "feels", "felt", "seem", "seems", "sounds",
-        "more", "something", "anything", "nothing", "be", "being", "been",
-    ]
-    /// A subject or modal before "like" makes it the verb, also across up to two
-    /// adverbs: "I really like it", "we'd all like".
-    static let likeSubject: Set<String> = [
-        "i", "you", "we", "they", "i'd", "you'd", "we'd", "they'd", "would", "don't", "didn't", "do", "did",
-    ]
-    static let likeAdverb: Set<String> = ["really", "actually", "also", "all", "just", "still", "never", "always", "both", "not"]
-    /// "just like" and "of like" compare only before one of these: "just like the old ones".
-    static let likeCompare: Set<String> = ["of", "just"]
-    static let likeObject: Set<String> = [
-        "the", "a", "an", "those", "these", "that", "this", "my", "your", "his", "her", "their",
-        "our", "it", "him", "them", "me", "us",
+    /// Doubled on purpose ("had had", "that that", "very very"), so never a stutter.
+    static let keepRepeat: Set<String> = [
+        "had", "that", "is", "no", "very", "really", "so", "bye", "yeah", "yes", "ok", "okay",
+        "go", "far", "more", "much", "many", "too", "ha",
     ]
     /// A sentence does not end on these, so a long pause after one is a hesitation.
     static let noEnd: Set<String> = [
@@ -73,53 +60,34 @@ private enum Rules {
             i += 1
         }
 
-        // Adjacent repeats ("I, I", "the the"). The earlier copy goes, unless it ended a sentence.
+        // Adjacent repeats ("I, I", "the the"). The earlier copy goes, unless it ended a
+        // sentence, is a number ("4 4 7 1"), or doubles on purpose.
         i = 1
         while i < words.count {
-            let a = words[i - 1], b = words[i]
-            if !a.core.isEmpty && a.core.lowercased() == b.core.lowercased() && !a.terminal {
+            let a = words[i - 1], b = words[i], c = a.core.lowercased()
+            if !c.isEmpty && c == b.core.lowercased() && !a.terminal
+                && !keepRepeat.contains(c) && !c.allSatisfy(\.isNumber) {
                 remove(&words, i - 1)
                 continue
             }
             i += 1
         }
 
-        // "you know" as a hedge, only where punctuation sets it off.
+        // "you know" and "like" as hedges only where commas set them off — ", you know,",
+        // "Like, …". Unpunctuated, each is as often the verb or a comparison
+        // ("as you know", "tastes like chicken"), and a word kept is cheaper than one lost.
         i = 0
-        while i < words.count - 1 {
-            let a = words[i], b = words[i + 1]
-            if a.core.lowercased() == "you" && b.core.lowercased() == "know"
-                && (a.comma || b.comma || i == 0 || words[i - 1].comma || words[i - 1].terminal) {
+        while i < words.count {
+            let opens = i == 0 || words[i - 1].comma || words[i - 1].terminal
+            let c = words[i].core.lowercased()
+            if opens, c == "you", i + 1 < words.count, words[i + 1].core.lowercased() == "know", words[i + 1].comma {
                 remove(&words, i)
                 remove(&words, i)
                 continue
             }
-            i += 1
-        }
-
-        // "like": kept as a verb, a comparison, or "like that"; dropped as a hedge.
-        i = 0
-        while i < words.count {
-            if words[i].core.lowercased() == "like" {
-                let prev = i > 0 ? words[i - 1] : nil
-                let next = i + 1 < words.count ? words[i + 1] : nil
-                let compares = prev.map { likeCompare.contains($0.core.lowercased()) && !$0.comma } ?? false
-                    && !words[i].comma && (next.map { likeObject.contains($0.core.lowercased()) } ?? false)
-                // "like it is", "like they were": a comparison clause.
-                let clause = i + 2 < words.count && !words[i].comma && !words[i + 1].comma
-                    && ["is", "was", "are", "were", "does", "did", "do"].contains(words[i + 2].core.lowercased())
-                var s = i - 1
-                while s > 0, s > i - 3, !words[s].comma, likeAdverb.contains(words[s].core.lowercased()) { s -= 1 }
-                let subject = s >= 0 && !words[s].terminal && (s == i - 1 || !words[s].comma && !words[i].comma)
-                    && likeSubject.contains(words[s].core.lowercased())
-                let keep = compares || clause || subject
-                    || (prev.map { likeKeepPrev.contains($0.core.lowercased()) } ?? false)
-                    || (next.map { $0.core.lowercased() == "that" } ?? false)
-                    || (prev.map { $0.comma && !words[i].comma } ?? false)
-                if !keep {
-                    remove(&words, i)
-                    continue
-                }
+            if opens, c == "like", words[i].comma {
+                remove(&words, i)
+                continue
             }
             i += 1
         }
@@ -198,11 +166,14 @@ private enum Rules {
     // MARK: - Self-corrections
 
     /// "X, no wait, Y" → Y, replacing as many words of X as Y has. Spanish "no,
-    /// perdón", "digo", "espera", "mejor dicho" too. `actually` alone after a
-    /// clause end counts; "I actually like it" has no clause end before it.
+    /// perdón", "no, digo", "mejor dicho" too. The marker must be set off on both
+    /// sides — a clause end before it, and a comma or pause after it or a single
+    /// word closing the clause — and must be one only a correction uses: a lone
+    /// "sorry", "actually", "wait" or "I mean" is as often an apology or a hedge.
     static let markWords: Set<String> = ["no", "wait", "actually", "sorry", "perdón", "perdon", "digo", "espera", "mejor", "dicho"]
-    /// A marker run needs one of these: a bare "no" is an answer, not a correction.
-    static let distinct: Set<String> = ["wait", "sorry", "perdón", "perdon", "digo", "espera", "dicho", "actually", "scratch", "mean", "rather"]
+    /// What turns a "no" into a correction: "no wait", "no, sorry", "no, I mean".
+    static let afterNo: Set<String> = ["wait", "sorry", "actually", "perdón", "perdon", "espera", "digo", "i"]
+    static let pairs: Set<String> = ["scratch that", "or rather", "mejor dicho"]
     static let maxY = 4
 
     static func resolve(_ text: String) -> String {
@@ -246,16 +217,20 @@ private enum Rules {
         let toks = tokens(s)
         let n = toks.count
         for j in 1..<max(n, 1) where !isPause(toks[j]) && isMark(toks, j) {
-            let first = norm(toks[j])
             let prev = toks[..<j].last { !isPause($0) } ?? ""
-            guard endsClause(prev) || ["no", "or", "i", "scratch"].contains(first) else { continue }
+            guard endsClause(prev) else { continue }
             var m = j
             while m < n, !isPause(toks[m]), isMark(toks, m), !(m > j && endsSentence(toks[m - 1])) { m += 1 }
             let run = toks[j..<m].map(norm)
-            guard !Set(run).isDisjoint(with: distinct), run != ["no"] else { continue }
+            let correction = run.count > 1 && run[0] == "no" && afterNo.contains(run[1])
+                || zip(run, run.dropFirst()).contains { pairs.contains("\($0) \($1)") }
+            // A marker that ends a sentence has no Y in it: the next sentence is not a replacement.
+            guard correction, !endsSentence(toks[m - 1]) else { continue }
             // Y: the words after the marker, up to a clause end (inclusive) or a pause.
             var y: [String] = []
             var k = m
+            while k < n, isPause(toks[k]) { k += 1 }
+            let setOff = toks[m - 1].hasSuffix(",") || k > m
             while k < n, !isPause(toks[k]), y.count < maxY {
                 y.append(toks[k])
                 k += 1
@@ -263,6 +238,7 @@ private enum Rules {
             }
             if y.isEmpty || (y.count == maxY && !endsClause(y[y.count - 1])) { continue }
             if y.dropLast().contains(where: endsSentence) { continue }
+            guard setOff || (y.count == 1 && endsClause(y[0])) else { continue }
             // X: the last len(Y) words before the marker, not crossing a sentence end.
             var xs: [Int] = []
             var p = j - 1
