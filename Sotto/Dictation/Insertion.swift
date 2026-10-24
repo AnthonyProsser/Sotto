@@ -253,18 +253,24 @@ enum Insertion {
 
         // Its own task, so cancelling the dictation cannot cut the watch short:
         // the paste is already posted, and the clipboard is still owed back.
+        //
+        // **Only the field changing is evidence.** Another app writing the
+        // clipboard says nothing about whether the target read ours, and once it
+        // has, the clipboard is that app's: not restored, and not overwritten.
         return await Task {
             for _ in 0..<Self.pasteChecks {
                 try? await Task.sleep(for: .milliseconds(50))
-                guard pasteboard.changeCount == written else {
-                    log.notice("Clipboard changed during the paste; not restored.")
-                    return .inserted
-                }
                 if let after = measure(element), after != before {
-                    restore(saved, to: pasteboard)
-                    log.notice("Paste landed in \((ContinuousClock.now - posted).ms, privacy: .public) ms; clipboard restored.")
+                    let ours = pasteboard.changeCount == written
+                    if ours { restore(saved, to: pasteboard) }
+                    log.notice("Paste landed in \((ContinuousClock.now - posted).ms, privacy: .public) ms; clipboard \(ours ? "restored" : "changed by another app, left alone", privacy: .public).")
                     return .inserted
                 }
+            }
+            guard pasteboard.changeCount == written else {
+                // Neither in the field nor on the clipboard; History has it.
+                log.notice("Paste not seen landing and the clipboard changed; nothing inserted.")
+                return .failed("Couldn’t insert text")
             }
             log.notice("Paste not seen landing; transcript left on the clipboard.")
             return .copied

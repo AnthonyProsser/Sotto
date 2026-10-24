@@ -179,10 +179,6 @@ final class Dictation {
             do {
                 state = try await dictate(stream, released: released, latched: latched, started: started)
             } catch {
-                // Still capturing means the latch is this dictation's and the user
-                // never tapped to end it. Once capture has stopped the recognizer
-                // has moved on, and may already hold the next dictation's latch.
-                let ownsLatch = latched && capturing
                 // Whatever the analyzers were doing, they stop here — a `begin`
                 // that threw halfway leaves a lane running, and a cancelled
                 // pipeline is the one the next `start()` is waiting on.
@@ -193,7 +189,10 @@ final class Dictation {
                 // the next dictation.
                 guard !Task.isCancelled else { return }
                 AudioCapture.shared.discardRecording()
-                if ownsLatch { EventTap.shared.endLatch() }
+                // Not cancelled means still the current pipeline — nothing clears
+                // `pipeline` without cancelling it — so `capturing` is this one's:
+                // still set, the latch is ours and the user never tapped to end it.
+                if latched && capturing { EventTap.shared.endLatch() }
                 log.error("Transcription failed: \(error.localizedDescription, privacy: .public)")
                 state = Self.message(for: error).map(HUDState.error)
             }

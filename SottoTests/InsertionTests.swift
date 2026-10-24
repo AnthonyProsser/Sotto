@@ -187,6 +187,36 @@ struct InsertionIntegrationTests {
         }
     }
 
+    /// Another app writing the clipboard mid-watch is not the paste landing: the
+    /// transcript is in neither place, so the HUD must say so, and that app's write stays.
+    @Test(.enabled(if: AXIsProcessTrusted(), "test host has no Accessibility grant"))
+    func aClipboardChangeMidWatchIsNotALanding() async throws {
+        try await keepingClipboard {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString("user clipboard \(UUID().uuidString)", forType: .string)
+            let (view, window) = try await focusedTextView("hello", as: IgnoresAXWrites(frame: NSRect(x: 0, y: 0, width: 300, height: 100)))
+            defer { window.orderOut(nil) }
+            let previous = NSApp.mainMenu
+            NSApp.mainMenu = NSMenu()
+            defer { NSApp.mainMenu = previous }
+
+            let other = "another app \(UUID().uuidString)"
+            let writer = Task {
+                try await Task.sleep(for: .milliseconds(300))
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(other, forType: .string)
+            }
+            let outcome = await Insertion.insert("world")
+            try await writer.value
+            guard case .failed = outcome else {
+                Issue.record("expected .failed, got \(outcome)")
+                return
+            }
+            #expect(view.string == "hello")
+            #expect(NSPasteboard.general.string(forType: .string) == other)
+        }
+    }
+
     @Test(.enabled(if: AXIsProcessTrusted(), "test host has no Accessibility grant"))
     func noFocusedFieldCopiesToTheClipboardAndTouchesNoView() async throws {
         try await keepingClipboard {
