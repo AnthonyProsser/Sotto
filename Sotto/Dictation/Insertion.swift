@@ -172,7 +172,7 @@ enum Insertion {
     /// free: an `AXSelectedText` write is a single edit to the target's own text
     /// storage, and a paste is one `NSUndoManager` group. Nothing here types
     /// character by character, which is the shape that would break it.
-    static func insert(_ text: String) -> Outcome {
+    static func insert(_ text: String) async -> Outcome {
         let focused = focusedElement()
         guard let element = focused, isWritable(element) else {
             // Which app and which role, never the text: the line that says why a
@@ -214,25 +214,48 @@ enum Insertion {
 
         // 2. Clipboard paste.
         log.notice("AX write did not land; falling back to paste.")
-        return paste(text) ? .inserted : .failed("Couldn’t insert text")
+        return await paste(text, into: element, measuredAt: before)
     }
 
-    private static func paste(_ text: String) -> Bool {
+    /// **The user's clipboard goes back only once the paste is seen landing**
+    /// (`DECISIONS.md`, 2026-10-23). The target reads the pasteboard on its own
+    /// turn of its runloop, and a fixed delay restored the old contents before a
+    /// slow app had read — which pasted the user's stale clipboard in place of the
+    /// transcript. Not seen landing, the transcript stays on the clipboard: a lost
+    /// clipboard item is recoverable, a wrong paste into someone's document is not.
+    private static func paste(_ text: String, into element: AXUIElement, measuredAt before: Int?) async -> Outcome {
         let pasteboard = NSPasteboard.general
         let saved = snapshot(pasteboard)
         pasteboard.clearContents()
-        guard pasteboard.setString(text, forType: .string) else { return false }
-
+        guard pasteboard.setString(text, forType: .string) else { return .failed("Couldn’t insert text") }
+        let written = pasteboard.changeCount
+        let posted = ContinuousClock.now
         post(keyCode: Key.v)
 
-        // The restore is asynchronous because the paste is: the target app reads
-        // the pasteboard on its own turn of the runloop, and putting the old
-        // contents back before it has read is the failure this delay exists for.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            restore(saved, to: pasteboard)
+        guard let before else {
+            log.notice("Paste posted into a field with no length; transcript left on the clipboard.")
+            return .inserted
         }
-        return true
+        for _ in 0..<Self.pasteChecks {
+            guard (try? await Task.sleep(for: .milliseconds(50))) != nil else { break }
+            guard pasteboard.changeCount == written else {
+                log.notice("Clipboard changed during the paste; not restored.")
+                return .inserted
+            }
+            if let after: Int = attribute(element, kAXNumberOfCharactersAttribute), after != before {
+                restore(saved, to: pasteboard)
+                log.notice("Paste landed in \((ContinuousClock.now - posted).ms, privacy: .public) ms; clipboard restored.")
+                return .inserted
+            }
+        }
+        log.notice("Paste not seen landing; transcript left on the clipboard.")
+        return .copied
     }
+
+    /// Fifty milliseconds apart, so two seconds in all — slow enough targets
+    /// still land well inside it, and past it the HUD's "Copied to clipboard"
+    /// is the honest report.
+    private static let pasteChecks = 40
 
     // MARK: - Synthetic events (§2.6)
 

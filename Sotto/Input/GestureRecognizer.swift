@@ -154,6 +154,17 @@ final class GestureRecognizer {
         return .pass
     }
 
+    /// The dictation ended without the user's stop — the latched auto-stop, or a
+    /// failure. Left latched, the next tap would be spent stopping a session that
+    /// is already over, and a double-tap would start nothing.
+    func endLatch() {
+        switch state {
+        case .latched: state = .idle
+        case .latchedTap: state = .spent // The key is down; its release must do nothing.
+        case .idle, .armed, .pushToTalk, .awaitingSecond, .spent: break
+        }
+    }
+
     // MARK: - Everything else
 
     private func otherKeyDown(isEscape: Bool) -> Disposition {

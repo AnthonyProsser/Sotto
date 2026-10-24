@@ -75,7 +75,7 @@ Bounds: one machine, no `sudo`, so this is ANE occupancy and latency rather than
 
 ## 3. The HUD's entire vocabulary
 
-**A waveform, two completion messages, and an error morph. That is all of it.** The waveform is mandatory and has no toggle. Audio-side failures surface here — transcription failure, audio model load failure, cleanup failing **mid-pass**, an AX write rejected (§4.5). See `.claude/rules/design.md` §10 for the full routing table.
+**A waveform, two completion messages, and an error morph. That is all of it.** The waveform is mandatory and has no toggle; after the release its dots sweep left to right while the transcript is on its way. Audio-side failures surface here — transcription failure, audio model load failure, an AX write rejected (§4.5). **An error only ever shows when nothing was inserted** (2026-10-23, `DECISIONS.md`): a cleanup pass failing mid-pass inserts the raw text and is logged, not shown. See `.claude/rules/design.md` §10 for the full routing table.
 
 **One case that looks like it belongs here and does not: the cleanup model being unavailable.** `SystemLanguageModel.availability != .available` is a configuration state, knowable before the gesture fires, and it routes to Settings → Dictation with a banner instead (2026-08-19, `DECISIONS.md`). **Slice 3 designs the error morph with no model-unavailable string in it.** The HUD says something went wrong with work the user just started; it does not report what the machine was never set up to do.
 

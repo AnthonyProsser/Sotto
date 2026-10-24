@@ -140,6 +140,33 @@ struct GestureRecognizerTests {
         #expect(h.take() == [.stop]) // Still latched, and a plain tap still stops it.
     }
 
+    @Test func endedLatchLetsTheNextDoubleTapLatchAgain() {
+        let h = Harness()
+        h.send(.keyDown); h.advance(0.05); h.send(.keyUp)
+        h.send(.keyDown); h.send(.keyUp)
+        _ = h.take()
+
+        h.recognizer.endLatch() // The auto-stop finished the dictation.
+        h.advance(1)
+        h.send(.keyDown); h.advance(0.05); h.send(.keyUp)
+        h.advance(0.1)
+        h.send(.keyDown)
+        #expect(h.take() == [.arm, .disarm, .latched])
+    }
+
+    @Test func endedLatchWithTheKeyDownReleasesInertly() {
+        let h = Harness()
+        h.send(.keyDown); h.advance(0.05); h.send(.keyUp)
+        h.send(.keyDown); h.send(.keyUp)
+        h.send(.keyDown) // Mid-tap when the auto-stop lands.
+        _ = h.take()
+
+        h.recognizer.endLatch()
+        h.send(.keyUp)
+        #expect(h.take().isEmpty)
+        #expect(h.recognizer.isIdle)
+    }
+
     // MARK: - Chords abort
 
     @Test func chordWhileArmedAbortsAndTheReleaseIsInert() {

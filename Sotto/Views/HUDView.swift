@@ -8,12 +8,15 @@
 import SwiftUI
 
 /// **The HUD's entire vocabulary: a waveform, a completion message, an error.**
+/// Transcribing is the waveform too, its dots taking turns rather than listening.
 /// There is no live transcript layer, no controls, and no waveform toggle — all
 /// three were cut and stay cut. If a state is not in this enum the HUD cannot
 /// say it, which is the point.
 enum HUDState: Equatable {
     /// Capture is running. `level` is 0…1 and drives the bars' amplitude.
     case recording(level: Double)
+    /// Capture has stopped and the transcript is on its way.
+    case transcribing
     /// "Copied to clipboard", and the insertion-succeeded case (§3).
     case message(String)
     /// Transcription, model load, cleanup, or a rejected AX write (§4.5, §14.3).
@@ -109,7 +112,8 @@ struct HUDView: View {
     /// table).
     private var widthKey: String {
         switch state {
-        case .recording: "recording"
+        // One key for both: the dots change what they do, not how many there are.
+        case .recording, .transcribing: "recording"
         case .message(let s), .error(let s): s
         }
     }
@@ -119,6 +123,8 @@ struct HUDView: View {
         switch state {
         case .recording(let level):
             Waveform(level: level, running: running)
+        case .transcribing:
+            Waveform(level: 0, running: running, transcribing: true)
         case .message(let text):
             Text(text)
                 // `.callout` is 12 pt. The 13 pt in `sotto-tokens.md` was never
@@ -146,6 +152,9 @@ struct HUDView: View {
 struct Waveform: View {
     let level: Double
     let running: Bool
+    /// A swell that crosses the dots left to right and starts again — working,
+    /// not listening, so it ignores `level`.
+    var transcribing = false
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -193,11 +202,24 @@ struct Waveform: View {
     /// never visibly loops — §6.2's "uneven and drifting" without storing a
     /// history. `level` scales it; the resting height is a dot, never zero.
     private func height(bar i: Int, at t: Double) -> CGFloat {
+        if transcribing { return sweep(bar: i, at: t) }
         let phase = Double(i) * 0.7
         let a = sin(t * 2.3 + phase) * 0.5 + 0.5
         let b = sin(t * 3.7 + phase * 1.9) * 0.5 + 0.5
         // `v^0.5` from §6.2: loudness is perceptual, so the tall end compresses.
         let envelope = pow((a * 0.65 + b * 0.35) * max(0, min(1, level)), 0.5)
         return max(Token.Authored.Waveform.resting, Token.Authored.Waveform.peak * envelope)
+    }
+
+    /// One crossing a second, entering before the first dot and leaving after the
+    /// last so each pass starts from a full row of resting dots. Half of `peak`
+    /// at the crest: a working indicator, quieter than a voice.
+    private func sweep(bar i: Int, at t: Double) -> CGFloat {
+        let bar = Token.Authored.Waveform.self
+        let span = Double(bar.count + 2)
+        let crest = (t.truncatingRemainder(dividingBy: 1) * span) - 1
+        let distance = abs(Double(i) - crest)
+        let swell = distance < 1.5 ? (cos(distance / 1.5 * .pi) + 1) / 2 : 0
+        return bar.resting + (bar.peak / 2 - bar.resting) * swell
     }
 }

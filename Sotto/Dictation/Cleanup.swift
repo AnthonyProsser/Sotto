@@ -113,7 +113,8 @@ final class Cleanup {
         }
         do {
             let instructions = instructions ?? Self.instructions(for: profile)
-            let session = if let next, next.instructions == instructions {
+            let staged = next?.instructions == instructions
+            let session = if staged, let next {
                 next.session
             } else {
                 LanguageModelSession(model: model, instructions: instructions)
@@ -135,7 +136,10 @@ final class Cleanup {
             // question ("Really?") read as a question to the model and came
             // back answered ("Yes."), however the instructions were worded.
             let prompt = "Transcript: <transcript>\(marked)</transcript>\nOutput:"
+            let started = ContinuousClock.now
             let text = try await session.respond(to: prompt, options: options).content
+            // Sizes and time only, never the text.
+            log.notice("Cleanup pass: \((ContinuousClock.now - started).ms, privacy: .public) ms, \(staged ? "staged" : "cold", privacy: .public) session, \(marked.count, privacy: .public) → \(text.count, privacy: .public) chars.")
             return try Self.sanitize(text, input: marked)
         } catch let failure as Failure {
             throw failure
