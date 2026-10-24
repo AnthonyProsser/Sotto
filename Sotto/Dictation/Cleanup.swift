@@ -38,7 +38,6 @@ final class Cleanup {
         /// Settings → Dictation with a banner, never the HUD (`rules/design.md`
         /// §10).
         case unavailable(String)
-        case failed(Error)
         /// The output failed `sanitize` — a runaway, an answer, or a rewrite.
         case rejected
     }
@@ -87,11 +86,19 @@ final class Cleanup {
         }
     }
 
-    /// One pass over a marked transcript (`AudioHistory.mark` output). A fresh
-    /// session per pass: sessions accumulate transcript, and a previous
-    /// dictation's text must never sit in the next one's context — nor overflow
-    /// the 4096-token window. The prewarmed `next` session is fresh too: nothing
-    /// has been asked of it yet.
+    /// One pass over a marked transcript (`AudioHistory.mark` output): `tidy`,
+    /// and the model only where `needsModel` says the rules cannot do the job
+    /// (DECISIONS.md, 2026-10-24). A model pass that is unavailable, fails or is
+    /// rejected inserts the tidied text, never the raw.
+    ///
+    /// `locale` is the recording's (`Draft.locales.first`). The rules are English and
+    /// Spanish, so any other locale gets the model alone, as before them, and the
+    /// unmarked transcript when it cannot run.
+    ///
+    /// A fresh session per model pass: sessions accumulate transcript, and a
+    /// previous dictation's text must never sit in the next one's context — nor
+    /// overflow the 4096-token window. The prewarmed `next` session is fresh
+    /// too: nothing has been asked of it yet.
     ///
     /// **Cleanup owns this session and never shares it.** Reusing a single
     /// `LanguageModelSession` for two simultaneous requests throws
@@ -101,10 +108,14 @@ final class Cleanup {
     func clean(
         _ marked: String,
         profile: DictationProfile,
+        locale: String? = nil,
         instructions: String? = nil
     ) async throws -> String {
-        if let reason = unavailabilityReason {
-            throw Failure.unavailable(reason)
+        let rules = Self.rulesCover(locale)
+        let tidied = rules ? Self.tidy(marked) : AudioHistory.unmark(marked)
+        guard instructions != nil || !rules || Self.needsModel(marked, profile: profile) else { return tidied }
+        if unavailabilityReason != nil {
+            return tidied
         }
         Activity.shared.set(.cleanup, true)
         defer {
@@ -113,7 +124,8 @@ final class Cleanup {
         }
         do {
             let instructions = instructions ?? Self.instructions(for: profile)
-            let session = if let next, next.instructions == instructions {
+            let staged = next?.instructions == instructions
+            let session = if staged, let next {
                 next.session
             } else {
                 LanguageModelSession(model: model, instructions: instructions)
@@ -135,14 +147,31 @@ final class Cleanup {
             // question ("Really?") read as a question to the model and came
             // back answered ("Yes."), however the instructions were worded.
             let prompt = "Transcript: <transcript>\(marked)</transcript>\nOutput:"
+            let started = ContinuousClock.now
             let text = try await session.respond(to: prompt, options: options).content
-            return try Self.sanitize(text, input: marked)
-        } catch let failure as Failure {
-            throw failure
+            // Sizes and time only, never the text.
+            log.notice("Cleanup pass: \((ContinuousClock.now - started).ms, privacy: .public) ms, \(staged ? "staged" : "cold", privacy: .public) session, \(marked.count, privacy: .public) → \(text.count, privacy: .public) chars.")
+            let sanitized = try Self.sanitize(text, input: marked)
+            return rules ? Self.tidy(sanitized) : sanitized
         } catch {
-            log.error("Cleanup pass failed: \(error.localizedDescription, privacy: .public)")
-            throw Failure.failed(error)
+            log.error("Cleanup model pass failed, rules only: \(String(describing: error), privacy: .public)")
+            return tidied
         }
+    }
+
+    /// Whether `tidy`'s word lists speak this locale. Nil is a caller with no
+    /// recording behind it — the tests and the bench — and they dictate English.
+    nonisolated static func rulesCover(_ locale: String?) -> Bool {
+        locale.map { ["en", "es"].contains(Locale(identifier: $0).language.languageCode?.identifier) } ?? true
+    }
+
+    /// What the rules cannot do: a profile's own instructions or vocabulary, and
+    /// a transcript with no punctuation of its own — `DictationTranscriber`'s,
+    /// past `SpeechTranscriber`'s 30 locales, which leaves punctuation and
+    /// capitals to cleanup. A few unpunctuated words ("Test 123") are left alone.
+    nonisolated static func needsModel(_ marked: String, profile: DictationProfile) -> Bool {
+        !profile.cleanupInstructions.isEmpty || !profile.vocabulary.isEmpty
+            || (!AudioHistory.unmark(marked).contains { ".,?!".contains($0) } && words(marked).count > 3)
     }
 
     /// The markers are ours and never survive: strip any `[pause Nms]` or

@@ -32,8 +32,20 @@ final class Dictation {
     /// clipped.
     private var audioFormat: AVAudioFormat?
 
-    /// Live between `start()` and the end of the pipeline it kicks off.
+    /// **One task per dictation, from `start()` to the HUD's last word** (2026-10-23).
+    /// It used to be two — `start()`'s analyzer start and `stop()`'s finish — and
+    /// the first could put "Transcription failed" on screen while the second was
+    /// inserting. One task has one ending: an error, or an insertion, never both.
     private var pipeline: Task<Void, Never>?
+
+    /// A cancelled pipeline still tearing its analyzers down. The next one waits
+    /// for it, because `Transcription` is shared: a teardown landing after the
+    /// next `begin` emptied that dictation's lanes, and its finish then failed
+    /// with "Transcription unavailable".
+    private var settling: Task<Void, Never>?
+
+    /// `stop()` finishes this; the pipeline waits on it between `begin` and `finish`.
+    private var release: AsyncStream<Void>.Continuation?
 
     /// The capture stream opened speculatively on key-down, held until the gesture
     /// says what it was. **Nothing reads it while it sits here** — `AsyncStream` is
@@ -115,8 +127,18 @@ final class Dictation {
         }
     }
 
-    func start() {
-        guard pipeline == nil else { return }
+    /// A latched dictation stops itself after this long with no finalized word.
+    /// Pressing the key again is still the ordinary stop.
+    private static let latchedSilence = Duration.seconds(60)
+
+    func start(latched: Bool) {
+        guard pipeline == nil else {
+            // A double-tap during the last dictation's tail starts nothing, so its
+            // latch must not wait for a stop tap that would stop nothing.
+            if latched { EventTap.shared.endLatch() }
+            return
+        }
+        let started = ContinuousClock.now
 
         Activity.shared.set(.recording, true)
         // Already on screen and composited if the armed window ran; this is the
@@ -139,84 +161,58 @@ final class Dictation {
                 // A `nil` message is the permission-prompt case: the question is on
                 // screen, and a HUD error behind it would be Sotto complaining about
                 // something the user is in the middle of answering.
+                if latched { EventTap.shared.endLatch() }
                 finish(with: Self.message(for: error).map(HUDState.error))
                 return
             }
         }
 
         capturing = true
+        let (released, release) = AsyncStream<Void>.makeStream()
+        self.release = release
+        let previous = settling
+        settling = nil
 
         pipeline = Task { [stream] in
+            await previous?.value
+            let state: HUDState?
             do {
-                try await Transcription.shared.begin(stream, language: ProfileStore.shared.active.language)
+                state = try await dictate(stream, released: released, latched: latched, started: started)
             } catch {
+                // Whatever the analyzers were doing, they stop here — a `begin`
+                // that threw halfway leaves a lane running, and a cancelled
+                // pipeline is the one the next `start()` is waiting on.
+                await Transcription.shared.cancel()
+                // **A cancelled pipeline is not a failed one, and owns nothing
+                // any more.** `abort` and `cancelTranscription` have finished the
+                // HUD and discarded the audio; a capture running now belongs to
+                // the next dictation.
                 guard !Task.isCancelled else { return }
-                log.error("Transcriber failed to start: \(error.localizedDescription, privacy: .public)")
-                finish(with: Self.message(for: error).map(HUDState.error))
+                AudioCapture.shared.discardRecording()
+                // Not cancelled means still the current pipeline — nothing clears
+                // `pipeline` without cancelling it — so `capturing` is this one's:
+                // still set, the latch is ours and the user never tapped to end it.
+                if latched && capturing { EventTap.shared.endLatch() }
+                log.error("Transcription failed: \(error.localizedDescription, privacy: .public)")
+                state = Self.message(for: error).map(HUDState.error)
             }
+            guard !Task.isCancelled else { return }
+            finish(with: state)
         }
     }
 
-    /// The gesture ended. Capture stops, the analyzer finalizes, and the text goes
-    /// wherever §3 and §4.9 send it.
+    /// The gesture ended. Capture stops, and the pipeline `start()` began
+    /// finalizes and sends the text wherever §3 and §4.9 say.
     func stop() {
         guard capturing else { return }
         capturing = false
         AudioCapture.shared.stop()
-        // The waveform stays up through transcription: it is the surface that
-        // reports the failure if one happens, and a HUD that vanished at the
-        // release would have nowhere to say so. At level 0 it is a row of resting
-        // dots, which reads as listening rather than as finished.
-        HUDPanel.shared.show(.recording(level: 0))
-
-        pipeline = Task {
-            do {
-                let draft = try await Transcription.shared.finish()
-                let recording = AudioCapture.shared.takeRecording()
-                let profile = ProfileStore.shared.active
-                var text = draft.text
-                var cleaned: String?
-                var cleanupFailed = false
-                if profile.cleanupEnabled, !draft.text.isEmpty {
-                    let marked = AudioHistory.mark(draft.text, words: draft.words, pauses: draft.pauses)
-                    do {
-                        let result = try await Cleanup.shared.clean(marked, profile: profile)
-                        if !result.isEmpty {
-                            text = result
-                            cleaned = result
-                        }
-                    } catch Cleanup.Failure.unavailable {
-                        // Configuration state, not a failure: the banner in
-                        // Settings → Dictation owns it, and the dictation
-                        // proceeds like a cleanup-off profile.
-                    } catch {
-                        log.error("Cleanup failed: \(error.localizedDescription, privacy: .public)")
-                        cleanupFailed = true
-                    }
-                }
-                if let recording, !draft.text.isEmpty {
-                    AudioHistory.record(
-                        draft: draft,
-                        buffers: recording.buffers,
-                        format: recording.format,
-                        cleaned: cleaned,
-                        profile: profile.name
-                    )
-                }
-                deliver(text, cleanupFailed: cleanupFailed)
-            } catch {
-                AudioCapture.shared.discardRecording()
-                // **A cancelled pipeline is not a failed one.** Escape (either
-                // priority) and a chord both cancel this task, and the `await`
-                // above then throws `CancellationError` — reported, that puts
-                // "Transcription failed" on screen for 3.5 s immediately after
-                // the user asked for the opposite. `abort` and
-                // `cancelTranscription` have already finished the HUD.
-                guard !Task.isCancelled else { return }
-                log.error("Transcription failed: \(error.localizedDescription, privacy: .public)")
-                finish(with: Self.message(for: error).map(HUDState.error))
-            }
-        }
+        // The HUD stays up through transcription: it is the surface that reports
+        // the failure if one happens, and a HUD that vanished at the release would
+        // have nowhere to say so.
+        HUDPanel.shared.show(.transcribing)
+        release?.finish()
+        release = nil
     }
 
     /// Escape priority 1, a chord that revealed the gesture was Cmd+something
@@ -227,8 +223,12 @@ final class Dictation {
     /// **One discard path, and this is it.** `disarm` routes here rather than
     /// growing a second one; the difference between the two cases is only which of
     /// `pipeline` and `armed` was live, and `cancelPipeline` already handles both.
+    ///
+    /// **Only while the microphone is open.** A tap during the last dictation's
+    /// tail still disarms, and cancelling that tail would throw away text the
+    /// user finished speaking; Escape priority 2 is the way to do that.
     func abort() {
-        guard pipeline != nil || armed != nil else { return }
+        guard capturing || armed != nil else { return }
         armed = nil
         cancelPipeline()
         finish(with: nil)
@@ -256,34 +256,125 @@ final class Dictation {
         AudioCapture.shared.stop()
         AudioCapture.shared.discardRecording()
         pipeline?.cancel()
+        settling = pipeline
         pipeline = nil
-        Task { await Transcription.shared.cancel() }
     }
 
-    /// §3's ladder, and nothing before it.
+    /// The dictation, start to insertion. Returns what the HUD says last.
     ///
-    /// **Selection no longer routes anywhere** (Anthony, 2026-09-18, `DECISIONS.md`).
-    /// §4.9 sent a dictation made against selected text to the chat draft; chat is
-    /// gone, so the transcript takes the ordinary path and the AX write replaces
-    /// whatever was selected. This contradicts §4.9's "selected text is never a
-    /// dictation target" — his call, logged, and the spec copy is stale on it.
-    private func deliver(_ text: String, cleanupFailed: Bool) {
+    /// **An error and an insertion cannot both happen.** `Insertion.insert` is
+    /// the last thing here and nothing after it throws, so a thrown error means
+    /// nothing was inserted; and the HUD state comes from the insertion's outcome
+    /// and nothing else.
+    private func dictate(
+        _ stream: AsyncStream<AnalyzerInput>,
+        released: AsyncStream<Void>,
+        latched: Bool,
+        started: ContinuousClock.Instant
+    ) async throws -> HUDState? {
+        try Task.checkCancellation()
+        try await Transcription.shared.begin(stream, language: ProfileStore.shared.active.language)
+        let begun = ContinuousClock.now
+
+        let quiet = latched ? Task { await stopWhenQuiet() } : nil
+        for await _ in released {}
+        quiet?.cancel()
+        try Task.checkCancellation()
+
+        let stopped = ContinuousClock.now
+        let draft = try await Transcription.shared.finish()
+        // Cancelled while finalizing, the capture's buffers may already be the
+        // next dictation's: `start()` resets them before that pipeline waits on this one.
+        try Task.checkCancellation()
+        let finalized = ContinuousClock.now
+        let recording = AudioCapture.shared.takeRecording()
+        let profile = ProfileStore.shared.active
+        var text = draft.text
+        var cleaned: String?
+        var cleanup = "off"
+        if profile.cleanupEnabled, !draft.text.isEmpty {
+            let marked = AudioHistory.mark(draft.text, words: draft.words, pauses: draft.pauses)
+            do {
+                let result = try await Cleanup.shared.clean(marked, profile: profile, locale: draft.locales.first)
+                cleanup = "accepted"
+                if !result.isEmpty {
+                    text = result
+                    cleaned = result
+                }
+            } catch Cleanup.Failure.unavailable {
+                // Configuration state, not a failure: the banner in Settings →
+                // Dictation owns it, and the dictation proceeds like a
+                // cleanup-off profile.
+                cleanup = "unavailable"
+            } catch {
+                // **The raw text goes in and the HUD says nothing** (2026-10-23).
+                // A "Cleanup failed" beside text that had just landed read as the
+                // dictation failing.
+                log.error("Cleanup failed: \(String(describing: error), privacy: .public)")
+                cleanup = if case Cleanup.Failure.rejected = error { "rejected" } else { "failed" }
+            }
+        }
+        let cleanedAt = ContinuousClock.now
+        try Task.checkCancellation()
+
+        if let recording, !draft.text.isEmpty {
+            AudioHistory.record(
+                draft: draft,
+                buffers: recording.buffers,
+                format: recording.format,
+                cleaned: cleaned,
+                profile: profile.name
+            )
+        }
         guard !text.isEmpty else {
             log.notice("Nothing transcribed.")
-            finish(with: nil)
-            return
+            return nil
         }
+        // §3's ladder, and nothing before it.
+        //
+        // **Selection no longer routes anywhere** (Anthony, 2026-09-18,
+        // `DECISIONS.md`). §4.9 sent a dictation made against selected text to the
+        // chat draft; chat is gone, so the transcript takes the ordinary path and
+        // the AX write replaces whatever was selected. This contradicts §4.9's
+        // "selected text is never a dictation target" — his call, logged, and the
+        // spec copy is stale on it.
+        let outcome = await Insertion.insert(text)
+        let done = ContinuousClock.now
 
-        // A failed cleanup must not take the dictation with it: the raw text
-        // is what gets inserted, and the HUD says the pass failed.
-        let failure: HUDState? = cleanupFailed ? .error("Cleanup failed") : nil
-        switch Insertion.insert(text) {
-        case .inserted:
-            finish(with: failure)
-        case .copied:
-            finish(with: failure ?? .message("Copied to clipboard"))
-        case .failed(let reason):
-            finish(with: .error(reason))
+        // One line per dictation for the optimization work: where the time went
+        // between the release and the text landing. Counts and times, never text.
+        log.notice("""
+            TIMING recording=\((stopped - started).ms, privacy: .public)ms \
+            begin=\((begun - started).ms, privacy: .public)ms \
+            finalize=\((finalized - stopped).ms, privacy: .public)ms \
+            cleanup=\((cleanedAt - finalized).ms, privacy: .public)ms(\(cleanup, privacy: .public)) \
+            insert=\((done - cleanedAt).ms, privacy: .public)ms(\(String(describing: outcome), privacy: .public)) \
+            total=\((done - stopped).ms, privacy: .public)ms \
+            words=\(draft.words.count, privacy: .public) chars=\(text.count, privacy: .public) \
+            locale=\(draft.locales.first ?? "?", privacy: .public) latched=\(latched, privacy: .public)
+            """)
+
+        switch outcome {
+        case .inserted: return nil
+        case .copied: return .message("Copied to clipboard")
+        case .failed(let reason): return .error(reason)
+        }
+    }
+
+    /// The latched auto-stop: the ordinary `stop()`, once the transcriber has
+    /// gone `latchedSilence` without a finalized word. Finalized results come
+    /// every few seconds while someone talks and stop when they do, which is a
+    /// steadier signal than the microphone level — a fan or a room never trips it.
+    private func stopWhenQuiet() async {
+        while (try? await Task.sleep(for: .seconds(5))) != nil {
+            guard Transcription.shared.quiet >= Self.latchedSilence else { continue }
+            guard capturing else { return }
+            log.notice("Latched dictation went quiet; stopping.")
+            stop()
+            // The latch ended without the user's tap; the recognizer must not
+            // spend their next tap stopping it.
+            EventTap.shared.endLatch()
+            return
         }
     }
 
@@ -299,6 +390,7 @@ final class Dictation {
         pipeline = nil
         armed = nil
         capturing = false
+        release = nil
         // **The one exit closes the microphone too.** `finish` is reachable from
         // `start()`'s catch with capture already running — `begin` throwing left
         // the engine live, `pipeline` nil, and the release that followed rejected
@@ -327,5 +419,13 @@ final class Dictation {
     private static func message(for error: Error) -> String? {
         guard let localized = error as? LocalizedError else { return "Transcription failed" }
         return localized.errorDescription
+    }
+}
+
+extension Duration {
+    /// Whole milliseconds, for the timing lines in the log.
+    var ms: Int {
+        let (seconds, attoseconds) = components
+        return Int(seconds) * 1000 + Int(attoseconds / 1_000_000_000_000_000)
     }
 }

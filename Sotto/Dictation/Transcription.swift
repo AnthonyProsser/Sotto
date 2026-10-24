@@ -10,6 +10,7 @@ import CoreMedia
 import Foundation
 import NaturalLanguage
 import Speech
+import Synchronization
 import os
 
 /// **The whole of v1's speech-to-text.** `SpeechAnalyzer` with `SpeechTranscriber`,
@@ -47,6 +48,11 @@ actor Transcription {
     /// Spanish lane on the same buffers to completion.
     private var lanes: [Lane] = []
     private var feeder: Task<Void, Never>?
+    /// When the recording in flight last produced a finalized word — or began, if
+    /// it has produced none. A lock rather than actor state because the collectors
+    /// write it from their own tasks and the latched auto-stop reads it from main,
+    /// and neither should queue behind a finalize to do so.
+    private nonisolated let heard = Mutex(ContinuousClock.now)
     /// English and Spanish, reserved at launch when the machine already has them.
     private var enKind: Kind?
     private var esKind: Kind?
@@ -177,12 +183,16 @@ actor Transcription {
 
         let kinds = try kinds(for: language, fallback: kind)
         lanes = kinds.map { makeLane($0.makeEngine()) }
+        heard.withLock { $0 = .now }
         // A second analyzer needs its own stream; `AnalyzerInput` shares the buffer.
         let streams = fanOut(inputs, to: lanes.count)
         for (lane, stream) in zip(lanes, streams) {
             try await lane.analyzer.start(inputSequence: stream)
         }
     }
+
+    /// How long the recording in flight has gone without a finalized word.
+    nonisolated var quiet: Duration { .now - heard.withLock { $0 } }
 
     /// Called once the capture stream has finished. `finalizeAndFinishThroughEndOfInput`
     /// is what turns the last volatile span into a finalized result, so the draft
@@ -570,6 +580,7 @@ actor Transcription {
         var lastEnd: TimeInterval?
         for try await result in results where result.isFinal {
             let text = result.text
+            if !text.characters.allSatisfy(\.isWhitespace) { shared.heard.withLock { $0 = .now } }
             draft.text += String(text.characters)
             for run in text.runs {
                 guard let range = run.audioTimeRange else { continue }

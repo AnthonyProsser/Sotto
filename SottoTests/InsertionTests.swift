@@ -89,7 +89,7 @@ struct InsertionIntegrationTests {
     func insertsAtTheCaretWithALeadingSpace() async throws {
         let (view, window) = try await focusedTextView("hello")
         defer { window.orderOut(nil) }
-        let outcome = Insertion.insert("world")
+        let outcome = await Insertion.insert("world")
         guard case .inserted = outcome else {
             Issue.record("expected .inserted, got \(outcome)")
             return
@@ -101,7 +101,7 @@ struct InsertionIntegrationTests {
     func noSpaceAgainstAnOpener() async throws {
         let (view, window) = try await focusedTextView("say (")
         defer { window.orderOut(nil) }
-        guard case .inserted = Insertion.insert("hi") else {
+        guard case .inserted = await Insertion.insert("hi") else {
             Issue.record("expected .inserted")
             return
         }
@@ -154,16 +154,66 @@ struct InsertionIntegrationTests {
 
                 let (view, window) = try await focusedTextView("hello", as: IgnoresAXWrites(frame: NSRect(x: 0, y: 0, width: 300, height: 100)))
                 defer { window.orderOut(nil) }
-                guard case .inserted = Insertion.insert("world") else {
+                guard case .inserted = await Insertion.insert("world") else {
                     Issue.record("expected .inserted from the paste rung")
                     return
                 }
-                for _ in 0..<40 where view.string != "hello world" { try await Task.sleep(for: .milliseconds(50)) }
+                // `insert` returns once it has seen the paste land and restored.
                 #expect(view.string == "hello world", "paste did not land: \(view.string)")
-                // The restore is deferred 0.5 s (Insertion.paste).
-                try await Task.sleep(for: .milliseconds(900))
                 #expect(NSPasteboard.general.string(forType: .string) == sentinel, "the user's clipboard was not restored")
             }
+        }
+    }
+
+    /// The stale-paste bug: a paste the target has not read yet must never find the
+    /// user's old clipboard put back under it. No Paste menu, so Cmd+V lands nowhere.
+    @Test(.enabled(if: AXIsProcessTrusted(), "test host has no Accessibility grant"))
+    func aPasteNotSeenLandingLeavesTheTranscriptOnTheClipboard() async throws {
+        try await keepingClipboard {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString("user clipboard \(UUID().uuidString)", forType: .string)
+            let (view, window) = try await focusedTextView("hello", as: IgnoresAXWrites(frame: NSRect(x: 0, y: 0, width: 300, height: 100)))
+            defer { window.orderOut(nil) }
+            let previous = NSApp.mainMenu
+            NSApp.mainMenu = NSMenu()
+            defer { NSApp.mainMenu = previous }
+
+            guard case .copied = await Insertion.insert("world") else {
+                Issue.record("expected .copied when the paste is never seen landing")
+                return
+            }
+            #expect(view.string == "hello")
+            #expect(NSPasteboard.general.string(forType: .string) == " world")
+        }
+    }
+
+    /// Another app writing the clipboard mid-watch is not the paste landing: the
+    /// transcript is in neither place, so the HUD must say so, and that app's write stays.
+    @Test(.enabled(if: AXIsProcessTrusted(), "test host has no Accessibility grant"))
+    func aClipboardChangeMidWatchIsNotALanding() async throws {
+        try await keepingClipboard {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString("user clipboard \(UUID().uuidString)", forType: .string)
+            let (view, window) = try await focusedTextView("hello", as: IgnoresAXWrites(frame: NSRect(x: 0, y: 0, width: 300, height: 100)))
+            defer { window.orderOut(nil) }
+            let previous = NSApp.mainMenu
+            NSApp.mainMenu = NSMenu()
+            defer { NSApp.mainMenu = previous }
+
+            let other = "another app \(UUID().uuidString)"
+            let writer = Task {
+                try await Task.sleep(for: .milliseconds(300))
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(other, forType: .string)
+            }
+            let outcome = await Insertion.insert("world")
+            try await writer.value
+            guard case .failed = outcome else {
+                Issue.record("expected .failed, got \(outcome)")
+                return
+            }
+            #expect(view.string == "hello")
+            #expect(NSPasteboard.general.string(forType: .string) == other)
         }
     }
 
@@ -183,7 +233,7 @@ struct InsertionIntegrationTests {
             try #require(window.firstResponder === button, "button did not take first responder")
 
             let text = "clipboard only \(UUID().uuidString)"
-            guard case .copied = Insertion.insert(text) else {
+            guard case .copied = await Insertion.insert(text) else {
                 Issue.record("expected .copied")
                 return
             }
@@ -223,7 +273,7 @@ struct InsertionIntegrationTests {
             }
             let target = try #require(element, "TextEdit's text view never took AX focus")
 
-            guard case .inserted = Insertion.insert("dictated into TextEdit") else {
+            guard case .inserted = await Insertion.insert("dictated into TextEdit") else {
                 Issue.record("expected .inserted")
                 return
             }

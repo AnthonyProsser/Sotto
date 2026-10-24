@@ -32,6 +32,7 @@ final class EventTap {
     private let log = Logger(subsystem: "com.anthonyprosser.Sotto", category: "gestures")
     let recognizer = GestureRecognizer()
     private var tap: CFMachPort?
+    private var runLoop: CFRunLoop?
 
     /// §10.4's arbiter, and the only piece of the priority stack that cannot live
     /// on the main actor: priority 1 is the recognizer's, it runs on this thread,
@@ -76,11 +77,36 @@ final class EventTap {
         thread.start()
     }
 
+    /// How late a signal may reach main and still mean what it meant (DECISIONS.md,
+    /// 2026-10-24). Normal delivery is under a millisecond. Past this, main was
+    /// blocked — a CoreAudio stall in `AVAudioEngine.stop()` held it 15 s — and the
+    /// queue behind it is a replay of presses whose moment is gone.
+    static let staleAfter: Duration = .seconds(1)
+
+    /// Only signals that begin work go stale. The ones that end it always land:
+    /// each is a guarded no-op when nothing is running, and dropping one could
+    /// strand a dictation that really is.
+    nonisolated static func isStale(
+        _ signal: GestureSignal, emitted: ContinuousClock.Instant, now: ContinuousClock.Instant = .now
+    ) -> Bool {
+        switch signal {
+        case .arm, .pushToTalk, .latched: now - emitted > staleAfter
+        case .disarm, .stop, .abort: false
+        }
+    }
+
     /// What each gesture signal does. `Dictation` owns the HUD, the idle signal,
     /// and everything downstream of them; this is the whole of the connection
     /// between the two files.
     @MainActor
-    private static func route(_ signal: GestureSignal) {
+    private static func route(_ signal: GestureSignal, emitted: ContinuousClock.Instant) {
+        if isStale(signal, emitted: emitted) {
+            shared.log.notice("Dropped \(signal.rawValue, privacy: .public), \((ContinuousClock.now - emitted).ms, privacy: .public) ms late")
+            // A dropped latch leaves the recognizer waiting for a stop tap that
+            // would stop nothing; the user's next double-tap would be spent on it.
+            if signal == .latched { shared.endLatch() }
+            return
+        }
         switch signal {
         case .arm:
             Dictation.shared.arm()
@@ -88,8 +114,10 @@ final class EventTap {
             // The same stop-and-discard `abort` performs. There is one discard
             // path and this is it.
             Dictation.shared.abort()
-        case .pushToTalk, .latched:
-            Dictation.shared.start()
+        case .pushToTalk:
+            Dictation.shared.start(latched: false)
+        case .latched:
+            Dictation.shared.start(latched: true)
         case .stop:
             Dictation.shared.stop()
         case .abort:
@@ -97,9 +125,17 @@ final class EventTap {
         }
     }
 
+    /// `GestureRecognizer.endLatch()`, on the only thread the recognizer is touched from.
+    func endLatch() {
+        guard let runLoop else { return }
+        CFRunLoopPerformBlock(runLoop, CFRunLoopMode.commonModes.rawValue) { [self] in recognizer.endLatch() }
+        CFRunLoopWakeUp(runLoop)
+    }
+
     // MARK: - The thread
 
     private func run() {
+        runLoop = CFRunLoopGetCurrent()
         // Assigned here rather than in `install()` on purpose: the timer has to land on
         // *this* runloop. Scheduled onto the main one it would fire on a thread the
         // state machine is never touched from; scheduled onto a runloop nobody runs, it
@@ -116,7 +152,8 @@ final class EventTap {
             // The state machine runs on the tap thread (§2.5); everything it
             // drives is main-actor. Hopping here rather than inside `HUDPanel`
             // keeps the thread boundary at the one place it is crossed.
-            DispatchQueue.main.async { Self.route(signal) }
+            let emitted = ContinuousClock.now
+            DispatchQueue.main.async { Self.route(signal, emitted: emitted) }
         }
 
         let mask = (1 << CGEventType.keyDown.rawValue)

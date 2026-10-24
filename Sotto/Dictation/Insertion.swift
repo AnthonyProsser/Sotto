@@ -146,14 +146,7 @@ enum Insertion {
     /// drags the whole document across the AX boundary, and the document can be a
     /// book.
     private static func characterBeforeCaret(_ element: AXUIElement) -> Character? {
-        var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(
-            element, kAXSelectedTextRangeAttribute as CFString, &value
-        ) == .success,
-            let raw = value, CFGetTypeID(raw) == AXValueGetTypeID() else { return nil }
-
-        var caret = CFRange()
-        guard AXValueGetValue(raw as! AXValue, .cfRange, &caret), caret.location > 0 else { return nil }
+        guard let caret = selectedRange(element), caret.location > 0 else { return nil }
 
         var preceding = CFRange(location: caret.location - 1, length: 1)
         guard let parameter = AXValueCreate(.cfRange, &preceding) else { return nil }
@@ -164,6 +157,26 @@ enum Insertion {
         return (result as? String)?.last
     }
 
+    private static func selectedRange(_ element: AXUIElement) -> CFRange? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(
+            element, kAXSelectedTextRangeAttribute as CFString, &value
+        ) == .success,
+            let raw = value, CFGetTypeID(raw) == AXValueGetTypeID() else { return nil }
+        var range = CFRange()
+        return AXValueGetValue(raw as! AXValue, .cfRange, &range) ? range : nil
+    }
+
+    /// What a write is measured by: the field's length, then where its selection
+    /// sits. Length alone misses a selection replaced by text of the same length —
+    /// a dictation fired over a selection replaces it (2026-09-18) — and the caret
+    /// landing after the new text is what still tells. Nil when the field reports
+    /// no length: nothing can be measured.
+    private static func measure(_ element: AXUIElement) -> [Int]? {
+        guard let length: Int = attribute(element, kAXNumberOfCharactersAttribute) else { return nil }
+        return selectedRange(element).map { [length, $0.location, $0.length] } ?? [length]
+    }
+
     // MARK: - Insertion
 
     /// The ladder. Returns what the HUD should say.
@@ -172,7 +185,7 @@ enum Insertion {
     /// free: an `AXSelectedText` write is a single edit to the target's own text
     /// storage, and a paste is one `NSUndoManager` group. Nothing here types
     /// character by character, which is the shape that would break it.
-    static func insert(_ text: String) -> Outcome {
+    static func insert(_ text: String) async -> Outcome {
         let focused = focusedElement()
         guard let element = focused, isWritable(element) else {
             // Which app and which role, never the text: the line that says why a
@@ -196,43 +209,78 @@ enum Insertion {
         //    Believing the status there loses the text with no error anywhere,
         //    which is the one outcome §4.5 rules out.
         //
-        //    `AXNumberOfCharacters` is the check because it is an integer: the
-        //    obvious alternative, reading `AXValue` before and after, copies the
-        //    whole document across the AX boundary twice on every dictation, and
-        //    the document can be a book. A same-length replacement would defeat
-        //    it and cannot arise here — a selection routes to chat (§4.9), so
-        //    insertion always runs against a bare caret.
+        //    `measure` is the check because it is three integers: the obvious
+        //    alternative, reading `AXValue` before and after, copies the whole
+        //    document across the AX boundary twice on every dictation, and the
+        //    document can be a book.
         let text = leadingSpace(for: element) + text
-        let before: Int? = attribute(element, kAXNumberOfCharactersAttribute)
+        let before = measure(element)
         if AXUIElementSetAttributeValue(
             element, kAXSelectedTextAttribute as CFString, text as CFTypeRef
         ) == .success,
-           let before, let after: Int = attribute(element, kAXNumberOfCharactersAttribute),
-           after != before {
+           let before, let after = measure(element), after != before {
             return .inserted
         }
 
         // 2. Clipboard paste.
         log.notice("AX write did not land; falling back to paste.")
-        return paste(text) ? .inserted : .failed("Couldn’t insert text")
+        return await paste(text, into: element)
     }
 
-    private static func paste(_ text: String) -> Bool {
+    /// **The user's clipboard goes back only once the paste is seen landing**
+    /// (`DECISIONS.md`, 2026-10-23). The target reads the pasteboard on its own
+    /// turn of its runloop, and a fixed delay restored the old contents before a
+    /// slow app had read — which pasted the user's stale clipboard in place of the
+    /// transcript. Not seen landing, the transcript stays on the clipboard: a lost
+    /// clipboard item is recoverable, a wrong paste into someone's document is not.
+    /// A field with no length cannot be watched, so it reports `.copied` too: the
+    /// paste may have landed, and the transcript is on the clipboard either way.
+    private static func paste(_ text: String, into element: AXUIElement) async -> Outcome {
         let pasteboard = NSPasteboard.general
         let saved = snapshot(pasteboard)
         pasteboard.clearContents()
-        guard pasteboard.setString(text, forType: .string) else { return false }
-
+        guard pasteboard.setString(text, forType: .string) else { return .failed("Couldn’t insert text") }
+        let written = pasteboard.changeCount
+        // Measured now, not before the AX write: a write that landed late would
+        // otherwise read as this paste landing, and restore before it is read.
+        guard let before = measure(element) else {
+            post(keyCode: Key.v)
+            log.notice("Paste posted into a field with no length; transcript left on the clipboard.")
+            return .copied
+        }
+        let posted = ContinuousClock.now
         post(keyCode: Key.v)
 
-        // The restore is asynchronous because the paste is: the target app reads
-        // the pasteboard on its own turn of the runloop, and putting the old
-        // contents back before it has read is the failure this delay exists for.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            restore(saved, to: pasteboard)
-        }
-        return true
+        // Its own task, so cancelling the dictation cannot cut the watch short:
+        // the paste is already posted, and the clipboard is still owed back.
+        //
+        // **Only the field changing is evidence.** Another app writing the
+        // clipboard says nothing about whether the target read ours, and once it
+        // has, the clipboard is that app's: not restored, and not overwritten.
+        return await Task {
+            for _ in 0..<Self.pasteChecks {
+                try? await Task.sleep(for: .milliseconds(50))
+                if let after = measure(element), after != before {
+                    let ours = pasteboard.changeCount == written
+                    if ours { restore(saved, to: pasteboard) }
+                    log.notice("Paste landed in \((ContinuousClock.now - posted).ms, privacy: .public) ms; clipboard \(ours ? "restored" : "changed by another app, left alone", privacy: .public).")
+                    return .inserted
+                }
+            }
+            guard pasteboard.changeCount == written else {
+                // Neither in the field nor on the clipboard; History has it.
+                log.notice("Paste not seen landing and the clipboard changed; nothing inserted.")
+                return .failed("Couldn’t insert text")
+            }
+            log.notice("Paste not seen landing; transcript left on the clipboard.")
+            return .copied
+        }.value
     }
+
+    /// Fifty milliseconds apart, so two seconds in all — slow enough targets
+    /// still land well inside it, and past it the HUD's "Copied to clipboard"
+    /// is the honest report.
+    private static let pasteChecks = 40
 
     // MARK: - Synthetic events (§2.6)
 

@@ -118,8 +118,8 @@ Do not build past one of these without asking — `.claude/rules/open-questions.
 
 ### Slice 11 — Profiles, cleanup, and calibration
 
-- **Cleanup defaults to Apple's on-device model**, with `Guardrails.permissiveContentTransformations`. Still per-profile.
-- **Fix the self-correction instruction.** Measured: the model preserves "no wait, actually" instead of resolving to what the speaker settled on, which is what §4.6 asks for.
+- **Cleanup is deterministic rules by default; Apple's on-device model runs only for profile instructions/vocabulary or unpunctuated text**, with `Guardrails.permissiveContentTransformations` — `DECISIONS.md` 2026-10-24.
+- **Self-corrections are resolved by rules** (`Cleanup.tidy`), not the prompt — `DECISIONS.md` 2026-10-24.
 - **Fill the prewarm seam** slice 3 left; never set `Activity.Contributor.cleanup` for a prewarm.
 - **The per-profile cleanup model picker is gone with the model list** (2026-09-18). Cleanup is Apple's `SystemLanguageModel` or it is off.
 - **Fill the two remaining empty slots on `AudioEntry`.** Slice 5 writes `cleaned` and `profile` as `nil` / `[]` so the on-disk shape does not change later. Cleanup writes `cleaned`. The active profile's name writes `profile`. **The third slot is settled and is not yours**: `languages` became `locales` on 2026-09-18 and is written from `LocaleDependentSpeechModule.selectedLocales`, because Apple Speech does no language detection — `DECISIONS.md`, and `rules/audio-and-transcription.md` §3.1. The sidecar is `Sotto/History/AudioHistory.swift`.
