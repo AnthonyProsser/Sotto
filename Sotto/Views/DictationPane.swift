@@ -131,7 +131,7 @@ struct DictationPane: View {
             } footer: {
                 Text(
                     profile.wrappedValue.cleanupEnabled
-                    ? "Cleanup removes fillers, resolves self-corrections, and punctuates from your pauses."
+                    ? "Cleanup removes fillers, resolves self-corrections, and punctuates from your pauses. Extra instructions can change formatting and spelling, not your words — a pass that rewords is discarded and the raw transcript is inserted."
                     : "When off, the raw transcript is inserted as-is — including on locales past Apple's 30, where there is no native punctuation."
                 )
             }
