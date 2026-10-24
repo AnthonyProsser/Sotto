@@ -351,3 +351,22 @@ extension SharedState {
         }
     }
 }
+
+// MARK: - Signals that reach main late
+
+struct StaleSignalTests {
+    /// The replay after a main-thread stall (DECISIONS.md, 2026-10-24): anything that
+    /// would begin work is dropped past `staleAfter`; anything that ends work lands.
+    @Test func onlyLateBeginningsAreDropped() {
+        let emitted = ContinuousClock.now
+        let onTime = emitted + .milliseconds(5)
+        let late = emitted + EventTap.staleAfter + .milliseconds(1)
+        for signal in [GestureSignal.arm, .pushToTalk, .latched] {
+            #expect(!EventTap.isStale(signal, emitted: emitted, now: onTime))
+            #expect(EventTap.isStale(signal, emitted: emitted, now: late))
+        }
+        for signal in [GestureSignal.disarm, .stop, .abort] {
+            #expect(!EventTap.isStale(signal, emitted: emitted, now: late))
+        }
+    }
+}
